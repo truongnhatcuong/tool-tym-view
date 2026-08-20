@@ -4,6 +4,20 @@ from utils.selectors import UCircleSelectors
 from utils.helpers import random_delay
 import random
 
+# Shuffle bag: đảm bảo dùng hết cả 5 hệ (Hỏa/Thổ/Kim/Thủy/Mộc) đúng 1 lần mỗi
+# hệ trước khi xáo lại vòng mới, thay vì random độc lập từng video (có thể
+# trùng liên tiếp nhiều lần).
+_element_bag: list[str] = []
+
+def _draw_element(available_names: list[str]) -> str:
+    global _element_bag
+    # Bỏ khỏi bag những phần tử không còn tồn tại trong picker hiện tại
+    _element_bag = [e for e in _element_bag if e in available_names]
+    if not _element_bag:
+        _element_bag = available_names.copy()
+        random.shuffle(_element_bag)
+    return _element_bag.pop()
+
 async def detect_react_state(react_button) -> bool:
     # data-wavee-react-enta-state luôn là "absent" bất kể đã react hay chưa —
     # KHÔNG dùng để xác định trạng thái. Giá trị lựa chọn thật nằm ở
@@ -97,16 +111,20 @@ async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
             # Lấy danh sách các nút ngũ hành bên trong đúng picker vừa mở
             elements = picker.locator(UCircleSelectors.REACT_ELEMENTS)
             count = await elements.count()
-            
+
             if count > 0:
-                # Chọn random 1 phần tử
-                random_index = random.randint(0, count - 1)
-                random_element_btn = elements.nth(random_index)
-                element_name = await random_element_btn.get_attribute("data-wavee-element")
-                
+                # Chọn theo shuffle bag: dùng hết 5 hệ (mỗi hệ đúng 1 lần)
+                # rồi mới xáo lại vòng mới, tránh trùng hệ liên tiếp nhiều lần.
+                names = []
+                for i in range(count):
+                    names.append(await elements.nth(i).get_attribute("data-wavee-element"))
+
+                element_name = _draw_element(names)
+                random_element_btn = elements.nth(names.index(element_name))
+
                 await random_delay(0.5, 1.5)
                 await random_element_btn.click()
-                logger.info(f"Successfully reacted with: {element_name}")
+                logger.info(f"Successfully reacted with: {element_name} (bag còn lại: {_element_bag})")
             else:
                 logger.warning("Picker appeared but no elements found to click!")
                 
