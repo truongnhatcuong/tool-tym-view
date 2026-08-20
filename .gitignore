@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+venv/
+.venv/
+
+# Playwright browser profile (chứa session đăng nhập)
+browser-profile/
+
+# Logs & screenshots
+logs/
+
+# Env / secrets
+.env
+
+# IDE
+.vscode/
+.idea/

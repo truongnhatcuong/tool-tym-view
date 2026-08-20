@@ -1,0 +1,9 @@
+UCIRCLE_URL = "https://ucircle.net/app/c/7b944633-043c-445b-b516-aeeddb7bb7f9?v=d4f2b67c-317c-46fd-bbb7-c1bab3ed4740"
+HEADLESS = False
+WATCH_MIN_SECONDS = 5
+WATCH_MAX_SECONDS = 10
+MAX_VIDEOS_PER_SESSION = 100
+ACTION_DELAY_MIN = 1
+ACTION_DELAY_MAX = 3
+PROFILE_DIR = "./browser-profile"
+DRY_RUN = False
