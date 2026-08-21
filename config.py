@@ -1,9 +1,17 @@
-UCIRCLE_URL = "https://ucircle.net/app/c/dea448a6-b8e5-40e0-9cd7-68ea12abaac5?v=be70754c-940f-4bad-a03e-8352f2be9bae"
-HEADLESS = False
-WATCH_MIN_SECONDS = 2
-WATCH_MAX_SECONDS = 3
-MAX_VIDEOS_PER_SESSION = 1000
-ACTION_DELAY_MIN = 1
-ACTION_DELAY_MAX = 3
-PROFILE_DIR = "./browser-profile"
-DRY_RUN = False
+from config_manager import load_config
+
+# Tải cấu hình mới nhất từ file config.json
+_current_cfg = load_config()
+
+UCIRCLE_URL = _current_cfg.ucircle_url
+HEADLESS = _current_cfg.headless
+WATCH_MIN_SECONDS = _current_cfg.watch_min_seconds
+WATCH_MAX_SECONDS = _current_cfg.watch_max_seconds
+MAX_VIDEOS_PER_SESSION = _current_cfg.max_videos
+ACTION_DELAY_MIN = _current_cfg.action_delay_min
+ACTION_DELAY_MAX = _current_cfg.action_delay_max
+PROFILE_DIR = _current_cfg.profile_dir
+DRY_RUN = _current_cfg.dry_run
+REACT_ONLY = _current_cfg.react_only
+TARGET_VIDEO_ID = _current_cfg.target_video_id
+ELEMENT_MODE = _current_cfg.element_mode

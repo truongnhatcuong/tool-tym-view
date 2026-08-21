@@ -1,0 +1,14 @@
+{
+    "ucircle_url": "https://ucircle.net/app/c/dea448a6-b8e5-40e0-9cd7-68ea12abaac5",
+    "target_video_id": "bda5274a-0b69-4532-9ffd-ad4e03f18ce4",
+    "react_only": true,
+    "watch_min_seconds": 1,
+    "watch_max_seconds": 2,
+    "action_delay_min": 1,
+    "action_delay_max": 2,
+    "max_videos": 1000,
+    "headless": false,
+    "dry_run": false,
+    "profile_dir": "./browser-profile",
+    "element_mode": "shuffle"
+}
