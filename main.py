@@ -1,76 +1,90 @@
 import asyncio
 import argparse
-import config
+import sys
+import os
+from config_manager import load_config, save_config, AppConfig, extract_url_details
+from automation.engine import AutomationEngine
 from utils.logger import logger
-from playwright.async_api import async_playwright
-from automation.browser import launch_browser
-from automation.login import ensure_login
-from automation.feed import switch_to_wavee_tab, click_specific_video
-from automation.video import watch_video
-from automation.actions import react_element_if_needed, scroll_to_next_video, is_video_already_reacted
-from utils.helpers import random_delay
 
-async def main():
-    parser = argparse.ArgumentParser(description="UCircle Video QA Automation")
-    parser.add_argument("--dry-run", action="store_true", help="Run without clicking Like")
-    parser.add_argument("--videos", type=int, default=config.MAX_VIDEOS_PER_SESSION, help="Max videos per session")
-    parser.add_argument("--watch-min", type=int, default=config.WATCH_MIN_SECONDS, help="Min watch time")
-    parser.add_argument("--watch-max", type=int, default=config.WATCH_MAX_SECONDS, help="Max watch time")
-    parser.add_argument("--watch-video", action="store_true", help="Use original watch-then-react behavior")
-    args = parser.parse_args()
+def parse_args():
+    parser = argparse.ArgumentParser(description="UCircle Video QA & Auto React Tool")
+    parser.add_argument("--gui", action="store_true", help="Launch Graphical User Interface")
+    parser.add_argument("--url", type=str, default=None, help="UCircle URL")
+    parser.add_argument("--video-id", type=str, default=None, help="Target Video ID to start")
+    parser.add_argument("--dry-run", action="store_true", help="Run without clicking React button")
+    parser.add_argument("--videos", type=int, default=None, help="Max videos per session")
+    parser.add_argument("--watch-min", type=int, default=None, help="Min watch time (seconds)")
+    parser.add_argument("--watch-max", type=int, default=None, help="Max watch time (seconds)")
+    parser.add_argument("--watch-video", action="store_true", help="Watch video before reacting (default is react-only)")
+    parser.add_argument("--element", type=str, default=None, choices=["shuffle", "hoa", "tho", "kim", "thuy", "moc"], help="Element choice mode")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    return parser.parse_args()
 
-    # Override config with CLI args
-    is_dry_run = args.dry_run or config.DRY_RUN
-    max_videos = args.videos
-    watch_min = args.watch_min
-    watch_max = args.watch_max
-    react_only = not args.watch_video
+async def run_cli(cfg: AppConfig):
+    engine = AutomationEngine(cfg)
     
-    target_video_id = "d4f2b67c-317c-46fd-bbb7-c1bab3ed4740"
+    def log_handler(msg, lvl):
+        print(f"[{lvl}] {msg}")
+    
+    engine.on_log = log_handler
+    engine.on_status_change = lambda status: print(f">> Trạng thái: {status}")
+    
+    await engine.run()
 
-    async with async_playwright() as p:
-        browser = await launch_browser(p)
-        try:
-            page = browser.pages[0] if browser.pages else await browser.new_page()
-            
-            logger.info(f"Opening UCircle URL: {config.UCIRCLE_URL}")
-            await page.goto(config.UCIRCLE_URL)
-            
-            await ensure_login(page)
-            
-            success_tab = await switch_to_wavee_tab(page)
-            if not success_tab:
-                logger.error("Could not switch to Wavee tab. Exiting.")
-                return
-                
-            success_video = await click_specific_video(page, target_video_id)
-            if success_video:
-                for index in range(max_videos):
-                    logger.info(f"--- Processing video {index + 1}/{max_videos} ---")
+def main():
+    os.makedirs("logs/screenshots", exist_ok=True)
+    args = parse_args()
 
-                    try:
-                        if await is_video_already_reacted(page):
-                            logger.info("Video already reacted (Hỏa/Thổ/Kim/Thủy/Mộc chosen). Skipping watch/react.")
-                        else:
-                            if react_only:
-                                logger.info("React-only mode enabled: skipping watch step and reacting immediately.")
-                            else:
-                                await watch_video(page, watch_min, watch_max)
-                            await react_element_if_needed(page, dry_run=is_dry_run)
-                    except Exception as e:
-                        logger.error(f"Error processing video {index + 1}: {e}. Moving to next video.")
+    # Nếu người dùng muốn mở GUI hoặc cờ --gui
+    if args.gui:
+        import gui
+        gui.main()
+        return
 
-                    if index < max_videos - 1:
-                        await scroll_to_next_video(page)
-                        await random_delay(2, 4)
-                
-            logger.info("Session completed. Stopping automation.")
-        except Exception as e:
-            logger.error(f"Critical error in main loop: {e}")
-        finally:
-            await browser.close()
+    # Tải cấu hình từ config.json
+    cfg = load_config()
+
+    # Ghi đè bởi CLI arguments nếu có
+    if args.url:
+        cfg.ucircle_url = args.url
+        extracted = extract_url_details(args.url)
+        if extracted["video_id"] and not args.video_id:
+            cfg.target_video_id = extracted["video_id"]
+            
+    if args.video_id:
+        cfg.target_video_id = args.video_id
+    if args.dry_run:
+        cfg.dry_run = True
+    if args.videos is not None:
+        cfg.max_videos = args.videos
+    if args.watch_min is not None:
+        cfg.watch_min_seconds = args.watch_min
+    if args.watch_max is not None:
+        cfg.watch_max_seconds = args.watch_max
+    if args.watch_video:
+        cfg.react_only = False
+    if args.element:
+        cfg.element_mode = args.element
+    if args.headless:
+        cfg.headless = True
+
+    # Lưu lại cấu hình mới nhất
+    save_config(cfg)
+
+    print("=" * 60)
+    print("🚀 BẮT ĐẦU UCIRCLE QA AUTOMATION (CLI MODE)")
+    print(f"• URL: {cfg.ucircle_url}")
+    print(f"• Video ID mục tiêu: {cfg.target_video_id}")
+    print(f"• Chế độ React: {'Chỉ thả ngũ hành (Nhanh)' if cfg.react_only else f'Xem ({cfg.watch_min_seconds}s-{cfg.watch_max_seconds}s) rồi thả'}")
+    print(f"• Ngũ hành: {cfg.element_mode}")
+    print(f"• Số lượng video: {cfg.max_videos}")
+    print(f"• Dry Run: {cfg.dry_run} | Headless: {cfg.headless}")
+    print("=" * 60)
+
+    try:
+        asyncio.run(run_cli(cfg))
+    except KeyboardInterrupt:
+        print("\n[!] Đã nhận tín hiệu hủy từ bàn phím (Ctrl+C). Đang thoát...")
 
 if __name__ == "__main__":
-    import os
-    os.makedirs("logs/screenshots", exist_ok=True)
-    asyncio.run(main())
+    main()

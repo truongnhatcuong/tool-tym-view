@@ -1,516 +1,99 @@
-# Build UCircle Video Interaction QA Tool
+# UCircle Video Interaction QA & Auto React Tool
 
-## Mục tiêu
+Công cụ tự động hóa kiểm thử tương tác video và thả ngũ hành trên UCircle Wavee Feed, phát triển bằng **Python + Playwright + CustomTkinter**.
 
-Xây dựng một tool automation bằng **Python + Playwright** để kiểm thử luồng video trên UCircle tại URL:
+---
 
-`https://ucircle.net/app/c/7b944633-043c-445b-b516-aeeddb7bb7f9?v=d4f2b67c-317c-46fd-bbb7-c1bab3ed4740`
+## 🌟 Tính năng nổi bật
 
-Tool dùng cho **QA/testing trên tài khoản được phép**, mô phỏng một người dùng thật ở mức chức năng:
+1. **Giao diện đồ họa hiện đại (Modern Dark GUI)**:
+   - Bảng điều khiển thời gian thực: Thống kê số video đã duyệt, đã thả ngũ hành, đã bỏ qua, thời gian chạy.
+   - Nút điều khiển thông minh: **Bắt đầu**, **Tạm dừng**, **Dừng lại an toàn**, **Mở trình duyệt đăng nhập thủ công**.
+   - Cửa sổ Live Log đổi màu theo cấp độ (INFO xanh lá, WARNING vàng, ERROR đỏ) kèm nút Xuất log và Xóa log.
+   - Tab quản lý và xem nhanh ảnh chụp sự cố (Screenshots viewer).
 
-1. Mở UCircle.
-2. Đăng nhập thủ công nếu chưa đăng nhập.
-3. Mở Circle/video feed được chỉ định.
-4. Tìm video.
-5. Click/mở video.
-6. Theo dõi video trong khoảng thời gian cấu hình.
-7. Phát hiện nút Like.
-8. Click Like nếu video chưa được Like.
-9. Chuyển sang video tiếp theo.
-10. Ghi log toàn bộ quá trình.
+2. **Hệ thống Quản lý Cấu hình Tối ưu (`config_manager.py`)**:
+   - **Tự động nhận diện URL & Video ID**: Khi dán link UCircle bất kỳ (ví dụ `https://ucircle.net/app/c/...?...v=...`), hệ thống tự động bóc tách Video ID mục tiêu mà không cần chỉnh sửa thủ công.
+   - **Lưu trữ JSON an toàn (`config.json`)** với cơ chế xác thực dữ liệu (Validation) chống nhập sai thông số.
+   - **Cấu hình mẫu 1-click (Presets)**:
+     - ⚡ **Siêu Tốc (Fast React)**: Bỏ qua bước chờ xem, tương tác ngũ hành ngay lập tức.
+     - 🛡️ **An Toàn (Human-like)**: Xem video 3-7s, delay 2-4s ngẫu nhiên, mô phỏng người dùng thật.
+     - 🔍 **Kiểm Thử (Dry-Run)**: Duyệt video và ghi log kiểm tra luồng nhưng không bấm nút thật.
+   - **Lựa chọn Ngũ Hành linh hoạt**: Xáo bài đều 5 hệ (Shuffle bag) hoặc chọn cố định (Hỏa, Thổ, Kim, Thủy, Mộc).
 
-## Công nghệ
+---
 
-- Python 3.11+
-- Playwright
-- asyncio
-- pathlib
-- json
-- logging
-- dataclasses
-- dotenv
+## 🚀 Hướng dẫn Khởi chạy
 
-Không sử dụng Selenium.
-
-## Kiến trúc project
-
-Tạo project:
-
-```text
-ucircle-video-qa/
-├── main.py
-├── config.py
-├── requirements.txt
-├── .env
-├── .gitignore
-├── README.md
-│
-├── automation/
-│   ├── __init__.py
-│   ├── browser.py
-│   ├── login.py
-│   ├── feed.py
-│   ├── video.py
-│   └── actions.py
-│
-├── utils/
-│   ├── __init__.py
-│   ├── logger.py
-│   ├── selectors.py
-│   └── helpers.py
-│
-└── logs/
-```
-
-## Configuration
-
-Tạo `.env`:
-
-```env
-UCIRCLE_URL=https://ucircle.net/app/c/7b944633-043c-445b-b516-aeeddb7bb7f9?v=d4f2b67c-317c-46fd-bbb7-c1bab3ed4740
-
-HEADLESS=false
-
-WATCH_MIN_SECONDS=5
-WATCH_MAX_SECONDS=10
-
-MAX_VIDEOS_PER_SESSION=10
-
-ACTION_DELAY_MIN=1
-ACTION_DELAY_MAX=3
-
-PROFILE_DIR=./browser-profile
-```
-
-Không lưu password vào source code.
-
-## Browser
-
-Sử dụng Playwright Chromium.
-
-Sử dụng persistent browser profile:
-
-```python
-browser = await chromium.launch_persistent_context(
-    user_data_dir=PROFILE_DIR,
-    headless=HEADLESS
-)
-```
-
-Mục đích là để QA tester có thể đăng nhập thủ công một lần và session được giữ lại.
-
-Không tự động nhập OTP.
-
-Không bypass CAPTCHA.
-
-Không bypass Cloudflare hoặc anti-bot.
-
-Nếu gặp CAPTCHA/challenge thì:
-
-```text
-PAUSE AUTOMATION
-↓
-Thông báo cho người dùng
-↓
-Chờ người dùng xử lý thủ công
-↓
-Tiếp tục automation
-```
-
-## Login flow
-
-Khi mở URL:
-
-1. Kiểm tra xem người dùng đã đăng nhập chưa.
-2. Nếu đã login → tiếp tục.
-3. Nếu chưa login → hiển thị:
-
-```text
-Please login manually in the browser.
-Press ENTER after login is completed.
-```
-
-Không lưu credentials.
-
-## Video detection
-
-Không hard-code selector quá nhiều.
-
-Ưu tiên tìm element theo:
-
-1. role
-2. aria-label
-3. text
-4. data-testid
-5. CSS selector cuối cùng
-
-Tạo module:
-
-```text
-utils/selectors.py
-```
-
-Ví dụ:
-
-```python
-LIKE_SELECTORS = [
-    '[aria-label*="Like"]',
-    '[aria-label*="like"]',
-    'button[data-testid*="like"]',
-]
-
-VIDEO_SELECTORS = [
-    'video',
-    '[data-testid*="video"]',
-]
-```
-
-Nhưng trước khi sử dụng selector phải inspect DOM thực tế của UCircle và cập nhật selector cho đúng.
-
-## Watch video
-
-Khi tìm thấy video:
-
-```text
-VIDEO FOUND
-↓
-Open video
-↓
-Check video element
-↓
-Play
-↓
-Watch configured duration
-↓
-Check Like state
-```
-
-Thời gian xem:
-
-```python
-watch_seconds = random.uniform(
-    WATCH_MIN_SECONDS,
-    WATCH_MAX_SECONDS
-)
-```
-
-Trong QA mode có thể sử dụng random delay để kiểm thử các trường hợp timing khác nhau.
-
-Không sử dụng tốc độ hoặc tần suất nhằm tạo artificial engagement.
-
-## Like logic
-
-Trước khi click Like:
-
-```text
-CHECK CURRENT STATE
-```
-
-Nếu video đã Like:
-
-```text
-SKIP LIKE
-```
-
-Nếu chưa Like:
-
-```text
-CLICK LIKE
-```
-
-Sau khi click:
-
-```text
-VERIFY STATE CHANGED
-```
-
-Nếu state không thay đổi:
-
-```text
-LOG WARNING
-```
-
-Không click Like nhiều lần.
-
-Không retry vô hạn.
-
-Ví dụ:
-
-```python
-async def like_if_needed(page):
-    like_button = await find_like_button(page)
-
-    if not like_button:
-        return False
-
-    is_liked = await detect_like_state(like_button)
-
-    if is_liked:
-        logger.info("Already liked")
-        return False
-
-    await like_button.click()
-
-    await verify_like_state(like_button)
-
-    logger.info("Like action completed")
-
-    return True
-```
-
-## Next video
-
-Sau khi hoàn thành một video:
-
-```text
-WAIT
-↓
-FIND NEXT VIDEO
-↓
-SCROLL
-↓
-WAIT FOR VIDEO
-↓
-PROCESS
-```
-
-Không click liên tục.
-
-Không spam.
-
-Không chạy nhiều browser/account song song.
-
-## Session limit
-
-Có giới hạn:
-
-```env
-MAX_VIDEOS_PER_SESSION=10
-```
-
-Sau khi đạt giới hạn:
-
-```text
-Session completed.
-Stopping automation.
-```
-
-## Logging
-
-Log ra:
-
-```text
-logs/session.log
-```
-
-Format:
-
-```text
-2026-08-21 00:10:01 INFO  Browser started
-2026-08-21 00:10:04 INFO  Login detected
-2026-08-21 00:10:08 INFO  Video #1 detected
-2026-08-21 00:10:15 INFO  Video watched: 7.2s
-2026-08-21 00:10:16 INFO  Like state: not-liked
-2026-08-21 00:10:17 INFO  Like clicked
-2026-08-21 00:10:20 INFO  Moving to next video
-```
-
-## Error handling
-
-Các lỗi cần xử lý:
-
-- Login timeout
-- Video không tìm thấy
-- Like button không tìm thấy
-- Video không play
-- Page timeout
-- Browser crash
-- Network timeout
-- Unexpected DOM change
-
-Không retry vô hạn.
-
-Mỗi action tối đa 2-3 retries.
-
-## Screenshot debugging
-
-Khi action thất bại:
-
-```text
-logs/screenshots/
-```
-
-Tự động chụp:
-
-```python
-await page.screenshot(
-    path=f"logs/screenshots/error_{timestamp}.png"
-)
-```
-
-## Dry-run mode
-
-Thêm:
-
-```env
-DRY_RUN=true
-```
-
-Nếu:
-
-```env
-DRY_RUN=true
-```
-
-Tool sẽ:
-
-- mở video
-- watch video
-- tìm Like button
-- log rằng sẽ Like
-
-nhưng **không click Like**.
-
-Nếu:
-
-```env
-DRY_RUN=false
-```
-
-thì mới thực hiện click trong môi trường được phép kiểm thử.
-
-## CLI
-
-Hỗ trợ:
-
-```bash
-python main.py
-```
-
-và:
-
-```bash
-python main.py --dry-run
-```
-
-```bash
-python main.py --videos 5
-```
-
-```bash
-python main.py --watch-min 5 --watch-max 10
-```
-
-## Main flow
-
-Implement flow:
-
-```python
-async def main():
-
-    browser = await launch_browser()
-
-    page = await open_ucircle(browser)
-
-    await ensure_login(page)
-
-    for index in range(MAX_VIDEOS_PER_SESSION):
-
-        video = await find_video(page)
-
-        if not video:
-            logger.warning("Video not found")
-            break
-
-        await open_video(video)
-
-        await play_video(video)
-
-        await watch_video(
-            min_seconds=WATCH_MIN_SECONDS,
-            max_seconds=WATCH_MAX_SECONDS
-        )
-
-        if not DRY_RUN:
-            await like_if_needed(page)
-
-        await move_to_next_video(page)
-
-    await browser.close()
-```
-
-## Important constraints
-
-Tool này chỉ được thiết kế cho:
-
-- QA/testing
-- tài khoản mà người vận hành có quyền sử dụng
-- môi trường staging/test
-- kiểm thử UI/functionality
-
-Không implement:
-
-- CAPTCHA bypass
-- Cloudflare bypass
-- fingerprint spoofing
-- proxy rotation
-- account farming
-- fake accounts
-- mass likes
-- artificial view generation
-- spam engagement
-- scraping dữ liệu người dùng
-- lấy session/cookie của người khác
-- bypass rate limits
-- bypass platform security
-
-Nếu UCircle có API chính thức cho testing hoặc automation thì ưu tiên API chính thức thay vì browser automation.
-
-## README
-
-README phải có:
-
-1. Cài Python
-2. Cài dependencies
-3. Cài Playwright browser
+### 1. Cài đặt môi trường
+Đảm bảo đã cài đặt Python 3.10+ trên máy tính, sau đó chạy lệnh cài dependencies:
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-4. Tạo `.env`
-5. Chạy tool
-6. Login thủ công lần đầu
-7. Chạy dry-run
-8. Xem logs
-9. Troubleshooting
+### 2. Khởi chạy Giao diện Đồ họa (GUI)
+- **Cách 1**: Nhấp đúp chuột vào file `run_gui.bat` trên Windows.
+- **Cách 2**: Chạy lệnh qua terminal:
+  ```bash
+  python gui.py
+  ```
+  *(hoặc `python main.py --gui`)*
 
-## Deliverables
+### 3. Khởi chạy Chế độ Dòng Lệnh (CLI)
+- **Cách 1**: Nhấp đúp chuột vào file `run_cli.bat`.
+- **Cách 2**: Chạy lệnh tùy biến tham số:
+  ```bash
+  # Chạy theo cấu hình lưu trong config.json
+  python main.py
 
-Hãy tạo đầy đủ source code cho toàn bộ project.
+  # Chạy thử kiểm tra luồng (Dry-run)
+  python main.py --dry-run
 
-Yêu cầu:
+  # Chạy với số lượng video và thời gian xem tùy chỉnh
+  python main.py --videos 50 --watch-min 3 --watch-max 8 --watch-video
 
-- code chạy được
-- Type hints
-- async/await chuẩn
-- clean architecture
-- logging rõ ràng
-- exception handling
-- config tập trung
-- selector tách riêng
-- không hard-code credentials
-- không bypass security
-- README đầy đủ
+  # Chạy ẩn trình duyệt (Headless)
+  python main.py --headless
+  ```
 
-Trước khi code, hãy inspect cấu trúc DOM của trang UCircle ở URL được cung cấp và xác định selector thực tế cho:
+---
 
-- video
-- play
-- like
-- liked state
-- next video
-- loading state
+## 📂 Cấu trúc Thư mục
 
-Nếu không thể xác định selector từ môi trường hiện tại, hãy tạo selector abstraction và đánh dấu rõ những selector cần QA tester xác nhận thủ công thay vì tự đoán.
+```text
+tool-tym-view/
+├── run_gui.bat             # File khởi chạy giao diện nhanh cho Windows
+├── run_cli.bat             # File khởi chạy dòng lệnh nhanh cho Windows
+├── gui.py                  # Giao diện đồ họa CustomTkinter hiện đại
+├── main.py                 # Điểm vào chính hỗ trợ cả GUI và CLI
+├── config_manager.py       # Quản lý cấu hình, validation, smart URL parsing & presets
+├── config.py               # Tương thích ngược cấu hình
+├── config.json             # File lưu cấu hình người dùng (tự động tạo)
+├── requirements.txt        # Danh sách thư viện cần thiết
+│
+├── automation/             # Lõi tự động hóa
+│   ├── __init__.py
+│   ├── engine.py           # Bộ điều phối luồng có hỗ trợ pause/stop/callbacks
+│   ├── browser.py          # Khởi động trình duyệt Playwright
+│   ├── login.py            # Kiểm tra và hỗ trợ đăng nhập
+│   ├── feed.py             # Xử lý tab Wavee và mở video
+│   ├── video.py            # Xử lý thời gian xem video
+│   └── actions.py          # Tương tác ngũ hành và cuộn video
+│
+├── utils/                  # Tiện ích bổ trợ
+│   ├── __init__.py
+│   ├── logger.py           # Ghi log ra file và console
+│   ├── selectors.py        # Quản lý selector UCircle
+│   └── helpers.py          # Hàm delay ngẫu nhiên
+│
+├── browser-profile/        # Lưu trữ phiên đăng nhập trình duyệt (persistent context)
+└── logs/                   # Thư mục chứa session.log và ảnh chụp lỗi screenshots/
+```
+
+---
+
+## 💡 Lưu ý khi Sử dụng
+1. **Đăng nhập lần đầu**: Bạn có thể nhấn nút `🌐 Mở Trình Duyệt Đăng Nhập` trên giao diện để đăng nhập tài khoản UCircle một lần, session sẽ được lưu tự động trong thư mục `browser-profile`.
+2. **Dừng an toàn**: Trong quá trình chạy, bạn có thể nhấn `⏸ Tạm Dừng` hoặc `⏹ Dừng Lại` bất cứ lúc nào, tool sẽ hoàn tất an toàn và đóng trình duyệt sạch sẽ mà không gây treo tiến trình.

@@ -28,9 +28,14 @@ def _ensure_complete_element_set(names: list[str]) -> list[str]:
     return complete
 
 
-def _draw_element(available_names: list[str]) -> str:
+def _draw_element(available_names: list[str], mode: str = "shuffle") -> str:
     global _element_bag
     normalized_available = _ensure_complete_element_set(available_names)
+
+    # Nếu người dùng chỉ định cố định một hệ
+    if mode in _ELEMENT_CANONICAL:
+        return mode
+
     # Bỏ khỏi bag những phần tử không còn tồn tại trong picker hiện tại
     _element_bag = [e for e in _element_bag if e in normalized_available]
     if not _element_bag:
@@ -42,17 +47,15 @@ async def detect_react_state(react_button) -> bool:
     # data-wavee-react-enta-state luôn là "absent" bất kể đã react hay chưa —
     # KHÔNG dùng để xác định trạng thái. Giá trị lựa chọn thật nằm ở
     # data-wavee-react-mine (vd. "kim", "tho", "hoa", "thuy", "moc").
-    mine = await react_button.get_attribute("data-wavee-react-mine")
-    if mine and mine.strip():
-        return True
+    try:
+        mine = await react_button.get_attribute("data-wavee-react-mine")
+        if mine and mine.strip():
+            return True
+    except Exception:
+        pass
     return False
 
 async def get_active_video_id(page: Page) -> str | None:
-    # Tất cả section video được mount sẵn cùng lúc trong dialog cuộn dọc
-    # (không bị huỷ/tái tạo theo video), mỗi section cao bằng viewport.
-    # Vì vậy không thể dùng ":visible" để xác định video đang xem — section
-    # đã cuộn qua vẫn có bounding box hợp lệ nên Playwright vẫn tính là visible.
-    # Phải tự tìm section có rect.top gần 0 nhất (đang nằm trong khung nhìn).
     try:
         return await page.evaluate(
             """
@@ -94,7 +97,11 @@ async def is_video_already_reacted(page: Page) -> bool:
         logger.warning(f"Could not determine react state: {e}")
         return False
 
-async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
+async def react_element_if_needed(page: Page, dry_run: bool = True, element_mode: str = "shuffle") -> tuple[bool, str]:
+    """
+    Thực hiện tương tác ngũ hành nếu video chưa react.
+    Trả về (success: bool, status_message: str)
+    """
     try:
         active_video_id = await get_active_video_id(page)
         logger.info(f"Active video section: {active_video_id}")
@@ -107,18 +114,19 @@ async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
 
         if is_reacted:
             logger.info("Reaction state: already-reacted. Skipping.")
-            return False
+            return False, "already_reacted"
 
         logger.info("Reaction state: not-reacted. Proceeding to react.")
         
         if dry_run:
-            logger.info("[DRY-RUN] Will click React button and choose a random element here.")
+            logger.info("[DRY-RUN] Will click React button and choose an element.")
+            return True, "dry_run_success"
         else:
             await random_delay(0.5, 1.0)
             await react_button.click()
             logger.info("React button clicked. Waiting for picker to appear...")
             
-            # Đợi bảng chọn hiện ra (animation mở picker có thể mất hơn 3s)
+            # Đợi bảng chọn hiện ra
             picker_id = await react_button.get_attribute("aria-controls")
             if picker_id:
                 picker = page.locator(f'#{picker_id}')
@@ -133,18 +141,14 @@ async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
             count = await elements.count()
 
             if count > 0:
-                # Chọn theo shuffle bag: dùng hết 5 hệ (mỗi hệ đúng 1 lần)
-                # rồi mới xáo lại vòng mới, tránh trùng hệ liên tiếp nhiều lần.
                 names = []
                 for i in range(count):
                     raw_value = await elements.nth(i).get_attribute("data-wavee-element")
                     names.append(_normalize_element_name(raw_value))
 
                 complete_names = _ensure_complete_element_set(names)
-                element_name = _draw_element(complete_names)
+                element_name = _draw_element(complete_names, mode=element_mode)
 
-                # Nếu picker không hiển thị đủ 5 hệ, vẫn có thể click trực tiếp bằng selector
-                # có tên hệ. Điều này tránh mất phần "Thủy" hoặc các hệ khác do data không khớp.
                 match_index = None
                 for i in range(count):
                     raw_value = await elements.nth(i).get_attribute("data-wavee-element")
@@ -158,40 +162,38 @@ async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
                     if await fallback_btn.count() > 0:
                         await random_delay(0.5, 1.5)
                         await fallback_btn.click()
-                        logger.info(f"Successfully reacted with: {element_name} via fallback selector (bag còn lại: {_element_bag})")
+                        logger.info(f"Successfully reacted with: {element_name} via fallback selector")
                     else:
                         logger.warning(f"No fallback element found for {element_name}; picker count={count}, names={names}")
                 else:
-                    random_element_btn = elements.nth(match_index)
+                    target_element_btn = elements.nth(match_index)
                     await random_delay(0.5, 1.5)
-                    await random_element_btn.click()
-                    logger.info(f"Successfully reacted with: {element_name} (bag còn lại: {_element_bag})")
+                    await target_element_btn.click()
+                    logger.info(f"Successfully reacted with: {element_name}")
             else:
                 logger.warning("Picker appeared but no elements found to click!")
                 
             await random_delay(1, 2)
         
-        return True
+        return True, "reacted"
     except Exception as e:
-        # Nếu picker không kịp hiện nhưng thực ra video đã được react rồi
-        # (vd. do click trước đó hoặc do UI tự đổi trạng thái), coi như xong,
-        # không cần log lỗi và chụp màn hình.
         if await is_video_already_reacted(page):
             logger.info("Reaction state: already-reacted after retry check. Skipping.")
-            return False
+            return False, "already_reacted"
 
         logger.error(f"Failed to process React logic: {e}")
         try:
             import time
+            import os
+            os.makedirs("logs/screenshots", exist_ok=True)
             await page.screenshot(path=f"logs/screenshots/error_react_{int(time.time())}.png")
         except:
             pass
-        return False
+        return False, f"error: {e}"
 
 async def scroll_to_next_video(page: Page) -> bool:
     try:
         logger.info("Scrolling to next video...")
-        # Ở các trình xem video dạng feed, nhấn ArrowDown hoặc cuộn chuột sẽ chuyển sang video tiếp theo
         await page.keyboard.press("ArrowDown")
         await random_delay(1, 2)
         return True
