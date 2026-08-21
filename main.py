@@ -16,6 +16,7 @@ async def main():
     parser.add_argument("--videos", type=int, default=config.MAX_VIDEOS_PER_SESSION, help="Max videos per session")
     parser.add_argument("--watch-min", type=int, default=config.WATCH_MIN_SECONDS, help="Min watch time")
     parser.add_argument("--watch-max", type=int, default=config.WATCH_MAX_SECONDS, help="Max watch time")
+    parser.add_argument("--watch-video", action="store_true", help="Use original watch-then-react behavior")
     args = parser.parse_args()
 
     # Override config with CLI args
@@ -23,6 +24,7 @@ async def main():
     max_videos = args.videos
     watch_min = args.watch_min
     watch_max = args.watch_max
+    react_only = not args.watch_video
     
     target_video_id = "d4f2b67c-317c-46fd-bbb7-c1bab3ed4740"
 
@@ -50,7 +52,10 @@ async def main():
                         if await is_video_already_reacted(page):
                             logger.info("Video already reacted (Hỏa/Thổ/Kim/Thủy/Mộc chosen). Skipping watch/react.")
                         else:
-                            await watch_video(page, watch_min, watch_max)
+                            if react_only:
+                                logger.info("React-only mode enabled: skipping watch step and reacting immediately.")
+                            else:
+                                await watch_video(page, watch_min, watch_max)
                             await react_element_if_needed(page, dry_run=is_dry_run)
                     except Exception as e:
                         logger.error(f"Error processing video {index + 1}: {e}. Moving to next video.")

@@ -1,8 +1,8 @@
-UCIRCLE_URL = "https://ucircle.net/app/c/7b944633-043c-445b-b516-aeeddb7bb7f9?v=d4f2b67c-317c-46fd-bbb7-c1bab3ed4740"
+UCIRCLE_URL = "https://ucircle.net/app/c/dea448a6-b8e5-40e0-9cd7-68ea12abaac5?v=be70754c-940f-4bad-a03e-8352f2be9bae"
 HEADLESS = False
-WATCH_MIN_SECONDS = 5
-WATCH_MAX_SECONDS = 10
-MAX_VIDEOS_PER_SESSION = 100
+WATCH_MIN_SECONDS = 2
+WATCH_MAX_SECONDS = 3
+MAX_VIDEOS_PER_SESSION = 1000
 ACTION_DELAY_MIN = 1
 ACTION_DELAY_MAX = 3
 PROFILE_DIR = "./browser-profile"
