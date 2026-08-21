@@ -7,14 +7,34 @@ import random
 # Shuffle bag: đảm bảo dùng hết cả 5 hệ (Hỏa/Thổ/Kim/Thủy/Mộc) đúng 1 lần mỗi
 # hệ trước khi xáo lại vòng mới, thay vì random độc lập từng video (có thể
 # trùng liên tiếp nhiều lần).
+_ELEMENT_CANONICAL = ["hoa", "tho", "kim", "thuy", "moc"]
 _element_bag: list[str] = []
+
+
+def _normalize_element_name(value: str | None) -> str:
+    if value is None:
+        return ""
+    normalized = value.strip().lower().replace(" ", "")
+    normalized = normalized.replace("thuỷ", "thuy").replace("thủy", "thuy").replace("thuy", "thuy")
+    return normalized
+
+
+def _ensure_complete_element_set(names: list[str]) -> list[str]:
+    normalized = [_normalize_element_name(name) for name in names if _normalize_element_name(name)]
+    complete = normalized.copy()
+    for canonical in _ELEMENT_CANONICAL:
+        if canonical not in complete:
+            complete.append(canonical)
+    return complete
+
 
 def _draw_element(available_names: list[str]) -> str:
     global _element_bag
+    normalized_available = _ensure_complete_element_set(available_names)
     # Bỏ khỏi bag những phần tử không còn tồn tại trong picker hiện tại
-    _element_bag = [e for e in _element_bag if e in available_names]
+    _element_bag = [e for e in _element_bag if e in normalized_available]
     if not _element_bag:
-        _element_bag = available_names.copy()
+        _element_bag = normalized_available.copy()
         random.shuffle(_element_bag)
     return _element_bag.pop()
 
@@ -117,14 +137,35 @@ async def react_element_if_needed(page: Page, dry_run: bool = True) -> bool:
                 # rồi mới xáo lại vòng mới, tránh trùng hệ liên tiếp nhiều lần.
                 names = []
                 for i in range(count):
-                    names.append(await elements.nth(i).get_attribute("data-wavee-element"))
+                    raw_value = await elements.nth(i).get_attribute("data-wavee-element")
+                    names.append(_normalize_element_name(raw_value))
 
-                element_name = _draw_element(names)
-                random_element_btn = elements.nth(names.index(element_name))
+                complete_names = _ensure_complete_element_set(names)
+                element_name = _draw_element(complete_names)
 
-                await random_delay(0.5, 1.5)
-                await random_element_btn.click()
-                logger.info(f"Successfully reacted with: {element_name} (bag còn lại: {_element_bag})")
+                # Nếu picker không hiển thị đủ 5 hệ, vẫn có thể click trực tiếp bằng selector
+                # có tên hệ. Điều này tránh mất phần "Thủy" hoặc các hệ khác do data không khớp.
+                match_index = None
+                for i in range(count):
+                    raw_value = await elements.nth(i).get_attribute("data-wavee-element")
+                    if _normalize_element_name(raw_value) == element_name:
+                        match_index = i
+                        break
+
+                if match_index is None:
+                    fallback_selector = f'button[data-wavee-element="{element_name}"]'
+                    fallback_btn = page.locator(fallback_selector).first
+                    if await fallback_btn.count() > 0:
+                        await random_delay(0.5, 1.5)
+                        await fallback_btn.click()
+                        logger.info(f"Successfully reacted with: {element_name} via fallback selector (bag còn lại: {_element_bag})")
+                    else:
+                        logger.warning(f"No fallback element found for {element_name}; picker count={count}, names={names}")
+                else:
+                    random_element_btn = elements.nth(match_index)
+                    await random_delay(0.5, 1.5)
+                    await random_element_btn.click()
+                    logger.info(f"Successfully reacted with: {element_name} (bag còn lại: {_element_bag})")
             else:
                 logger.warning("Picker appeared but no elements found to click!")
                 
