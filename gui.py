@@ -5,20 +5,31 @@ import asyncio
 import threading
 import subprocess
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from config_manager import (
-    AppConfig, 
-    load_config, 
-    save_config, 
-    validate_config, 
-    extract_url_details, 
+    AppConfig,
+    load_config,
+    save_config,
+    validate_config,
+    extract_url_details,
     get_presets
 )
+from profile_manager import (
+    ProfileConfig,
+    ProxyConfig,
+    load_profiles,
+    save_profiles,
+    create_profile,
+    delete_profile,
+    update_profile,
+    get_enabled_profiles,
+)
 from automation.engine import AutomationEngine
+from automation.batch_engine import BatchEngine
 from automation.browser import launch_browser
 from playwright.async_api import async_playwright
 from utils.logger import logger
@@ -32,12 +43,14 @@ class UCircleAutomationGUI(ctk.CTk):
         super().__init__()
 
         self.title("UCircle Video Interaction QA Tool - Auto React Pro")
-        self.geometry("1020x760")
-        self.minsize(920, 680)
+        self.geometry("1100x780")
+        self.minsize(960, 700)
 
         # Cấu hình hiện tại
         self.config = load_config()
+        self.profiles: List[ProfileConfig] = load_profiles()
         self.engine: Optional[AutomationEngine] = None
+        self.batch_engine: Optional[BatchEngine] = None
         self.worker_thread: Optional[threading.Thread] = None
         self.is_running = False
         self.auto_scroll_log = True
@@ -47,6 +60,7 @@ class UCircleAutomationGUI(ctk.CTk):
         self._setup_ui()
         self._load_config_to_ui()
         self._refresh_screenshots_list()
+        self._refresh_profile_list()
 
         # Handle window close
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -72,7 +86,7 @@ class UCircleAutomationGUI(ctk.CTk):
 
         self.subtitle_label = ctk.CTkLabel(
             self.header_frame,
-            text="Tự động tương tác Ngũ Hành & Video Feed Wavee",
+            text="Tự động tương tác Ngũ Hành & Video Feed Wavee | Multi-Profile & Batch Run",
             font=ctk.CTkFont(size=12),
             text_color="#94a3b8"
         )
@@ -102,7 +116,7 @@ class UCircleAutomationGUI(ctk.CTk):
         self.tabview.grid(row=1, column=0, padx=15, pady=(5, 10), sticky="nsew")
 
         self.tab_dashboard = self.tabview.add("🚀 Bảng Điều Khiển")
-        self.tab_settings = self.tabview.add("⚙️ Cài Đặt Cấu Hình")
+        self.tab_settings = self.tabview.add("⚙️ Cấu Hình & Profile")
         self.tab_history = self.tabview.add("🖼️ Lịch Sử & Ảnh Lỗi")
 
         # Build each tab
@@ -148,13 +162,13 @@ class UCircleAutomationGUI(ctk.CTk):
         # Buttons
         self.btn_start = ctk.CTkButton(
             self.ctrl_frame,
-            text="▶ Bắt Đầu Chạy",
+            text="▶ Bắt Đầu Chạy (Tất Cả Profile Bật)",
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#10b981",
             hover_color="#059669",
             text_color="#ffffff",
             height=38,
-            command=self._on_start_clicked
+            command=self._on_batch_start
         )
         self.btn_start.grid(row=0, column=0, padx=(15, 8), pady=12)
 
@@ -180,7 +194,7 @@ class UCircleAutomationGUI(ctk.CTk):
             text_color="#ffffff",
             height=38,
             state="disabled",
-            command=self._on_stop_clicked
+            command=self._on_batch_stop
         )
         self.btn_stop.grid(row=0, column=2, padx=8, pady=12)
 
@@ -295,23 +309,17 @@ class UCircleAutomationGUI(ctk.CTk):
     # -------------------------------------------------------------
     def _build_settings_tab(self):
         self.tab_settings.grid_columnconfigure(0, weight=1)
-        self.tab_settings.grid_rowconfigure(0, weight=1)
+        self.tab_settings.grid_rowconfigure(0, weight=1)  # settings_scroll ở row=0 → cần weight ở đây
 
-        # Scrollable container for settings
+        # Scrollable container for settings + profiles
         self.settings_scroll = ctk.CTkScrollableFrame(self.tab_settings, fg_color="transparent")
         self.settings_scroll.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
         self.settings_scroll.grid_columnconfigure(0, weight=1)
 
-        # Section 1: Presets Quick Bar
-        self._build_presets_section(self.settings_scroll)
+        # Section 1: Profile Manager (lên đầu)
+        self._build_profiles_section(self.settings_scroll)
 
-        # Section 2: URL & Video Configuration
-        self._build_url_section(self.settings_scroll)
-
-        # Section 3: Interaction & Timing Options
-        self._build_timing_section(self.settings_scroll)
-
-        # Section 4: Advanced & Profile Options
+        # Section 3: Advanced & Global Options
         self._build_advanced_section(self.settings_scroll)
 
         # Bottom Save / Reset Action Bar
@@ -341,174 +349,7 @@ class UCircleAutomationGUI(ctk.CTk):
         )
         self.btn_reset_default.grid(row=0, column=2, padx=10, pady=8)
 
-    def _build_presets_section(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=("#0f172a", "#0f172a"), corner_radius=8)
-        frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        frame.grid_columnconfigure(3, weight=1)
 
-        lbl = ctk.CTkLabel(
-            frame, 
-            text="⚡ Cấu Hình Nhanh (Presets):", 
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#38bdf8"
-        )
-        lbl.grid(row=0, column=0, padx=15, pady=10, sticky="w")
-
-        btn_fast = ctk.CTkButton(
-            frame,
-            text="⚡ Siêu Tốc (Fast React)",
-            font=ctk.CTkFont(size=11),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            border_width=1,
-            border_color="#38bdf8",
-            command=lambda: self._apply_preset("fast")
-        )
-        btn_fast.grid(row=0, column=1, padx=5, pady=10)
-
-        btn_safe = ctk.CTkButton(
-            frame,
-            text="🛡️ An Toàn (Mô phỏng thật)",
-            font=ctk.CTkFont(size=11),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            border_width=1,
-            border_color="#10b981",
-            command=lambda: self._apply_preset("safe")
-        )
-        btn_safe.grid(row=0, column=2, padx=5, pady=10)
-
-        btn_dry = ctk.CTkButton(
-            frame,
-            text="🔍 Kiểm Thử (Dry-Run)",
-            font=ctk.CTkFont(size=11),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            border_width=1,
-            border_color="#f59e0b",
-            command=lambda: self._apply_preset("dry_run")
-        )
-        btn_dry.grid(row=0, column=3, padx=5, pady=10, sticky="w")
-
-    def _build_url_section(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=("#0f172a", "#0f172a"), corner_radius=8)
-        frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
-        frame.grid_columnconfigure(1, weight=1)
-
-        lbl_sec = ctk.CTkLabel(
-            frame,
-            text="📍 1. Đường Dẫn UCircle & Video Feed",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#e2e8f0"
-        )
-        lbl_sec.grid(row=0, column=0, columnspan=2, padx=15, pady=(12, 8), sticky="w")
-
-        # URL Field
-        lbl_url = ctk.CTkLabel(frame, text="URL Feed / Circle:", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_url.grid(row=1, column=0, padx=(15, 10), pady=6, sticky="w")
-
-        self.entry_url = ctk.CTkEntry(
-            frame,
-            placeholder_text="https://ucircle.net/app/c/...?...v=...",
-            font=ctk.CTkFont(size=12),
-            height=34
-        )
-        self.entry_url.grid(row=1, column=1, padx=(0, 15), pady=6, sticky="ew")
-        self.entry_url.bind("<KeyRelease>", self._on_url_changed)
-
-        # Extracted Target Video ID
-        lbl_vid = ctk.CTkLabel(frame, text="Video ID Mục Tiêu:", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_vid.grid(row=2, column=0, padx=(15, 10), pady=(0, 12), sticky="w")
-
-        self.entry_video_id = ctk.CTkEntry(
-            frame,
-            placeholder_text="Tự động bóc tách từ URL (hoặc nhập thủ công)",
-            font=ctk.CTkFont(size=12),
-            height=34
-        )
-        self.entry_video_id.grid(row=2, column=1, padx=(0, 15), pady=(0, 12), sticky="ew")
-
-    def _build_timing_section(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=("#0f172a", "#0f172a"), corner_radius=8)
-        frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-        frame.grid_columnconfigure(1, weight=1)
-
-        lbl_sec = ctk.CTkLabel(
-            frame,
-            text="⚡ 2. Chế Độ Tương Tác & Thời Gian",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#e2e8f0"
-        )
-        lbl_sec.grid(row=0, column=0, columnspan=2, padx=15, pady=(12, 8), sticky="w")
-
-        # Mode Selection: React only vs Watch then React
-        lbl_mode = ctk.CTkLabel(frame, text="Chế độ chạy:", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_mode.grid(row=1, column=0, padx=(15, 10), pady=6, sticky="w")
-
-        self.seg_react_mode = ctk.CTkSegmentedButton(
-            frame,
-            values=["Chỉ Thả Ngũ Hành (Nhanh)", "Xem Video rồi Thả Ngũ Hành"],
-            font=ctk.CTkFont(size=12),
-            selected_color="#0284c7",
-            selected_hover_color="#0369a1",
-            command=self._on_react_mode_toggle
-        )
-        self.seg_react_mode.grid(row=1, column=1, padx=(0, 15), pady=6, sticky="w")
-
-        # Element Selection
-        lbl_elem = ctk.CTkLabel(frame, text="Ngũ Hành Lựa Chọn:", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_elem.grid(row=2, column=0, padx=(15, 10), pady=6, sticky="w")
-
-        self.combo_element = ctk.CTkComboBox(
-            frame,
-            values=[
-                "🎲 Ngẫu nhiên 5 hệ (Shuffle bag)",
-                "🔥 Hệ Hỏa (hoa)",
-                "🏔️ Hệ Thổ (tho)",
-                "⚔️ Hệ Kim (kim)",
-                "💧 Hệ Thủy (thuy)",
-                "🌲 Hệ Mộc (moc)"
-            ],
-            font=ctk.CTkFont(size=12),
-            height=32,
-            width=260
-        )
-        self.combo_element.grid(row=2, column=1, padx=(0, 15), pady=6, sticky="w")
-
-        # Max Videos
-        lbl_max = ctk.CTkLabel(frame, text="Số lượng video tối đa:", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_max.grid(row=3, column=0, padx=(15, 10), pady=6, sticky="w")
-
-        self.entry_max_videos = ctk.CTkEntry(frame, width=120, height=32, font=ctk.CTkFont(size=12))
-        self.entry_max_videos.grid(row=3, column=1, padx=(0, 15), pady=6, sticky="w")
-
-        # Watch Time Range Frame
-        self.lbl_watch_time = ctk.CTkLabel(
-            frame, text="Thời gian xem (giây):", font=ctk.CTkFont(size=12), text_color="#94a3b8"
-        )
-        self.lbl_watch_time.grid(row=4, column=0, padx=(15, 10), pady=6, sticky="w")
-
-        self.frame_watch = ctk.CTkFrame(frame, fg_color="transparent")
-        self.frame_watch.grid(row=4, column=1, padx=(0, 15), pady=6, sticky="w")
-
-        self.entry_watch_min = ctk.CTkEntry(self.frame_watch, width=60, height=32, font=ctk.CTkFont(size=12))
-        self.entry_watch_min.grid(row=0, column=0, padx=(0, 5))
-        ctk.CTkLabel(self.frame_watch, text="đến", font=ctk.CTkFont(size=12)).grid(row=0, column=1, padx=5)
-        self.entry_watch_max = ctk.CTkEntry(self.frame_watch, width=60, height=32, font=ctk.CTkFont(size=12))
-        self.entry_watch_max.grid(row=0, column=2, padx=(5, 0))
-
-        # Delay Range Frame
-        lbl_delay = ctk.CTkLabel(frame, text="Độ trễ chuyển video (s):", font=ctk.CTkFont(size=12), text_color="#94a3b8")
-        lbl_delay.grid(row=5, column=0, padx=(15, 10), pady=(6, 12), sticky="w")
-
-        self.frame_delay = ctk.CTkFrame(frame, fg_color="transparent")
-        self.frame_delay.grid(row=5, column=1, padx=(0, 15), pady=(6, 12), sticky="w")
-
-        self.entry_delay_min = ctk.CTkEntry(self.frame_delay, width=60, height=32, font=ctk.CTkFont(size=12))
-        self.entry_delay_min.grid(row=0, column=0, padx=(0, 5))
-        ctk.CTkLabel(self.frame_delay, text="đến", font=ctk.CTkFont(size=12)).grid(row=0, column=1, padx=5)
-        self.entry_delay_max = ctk.CTkEntry(self.frame_delay, width=60, height=32, font=ctk.CTkFont(size=12))
-        self.entry_delay_max.grid(row=0, column=2, padx=(5, 0))
 
     def _build_advanced_section(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=("#0f172a", "#0f172a"), corner_radius=8)
@@ -627,48 +468,703 @@ class UCircleAutomationGUI(ctk.CTk):
         self.screenshots_scroll.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
         self.screenshots_scroll.grid_columnconfigure(0, weight=1)
 
+
+    # -------------------------------------------------------------
+    # PROFILE MANAGER SECTION (embedded in Settings Tab)
+    # -------------------------------------------------------------
+    def _build_profiles_section(self, parent):
+        """Xây dựng phần Quản lý Profile bên trong tab Cấu Hình."""
+        # Section separator label
+        sep = ctk.CTkLabel(
+            parent,
+            text="👤 4. Quản Lý Profile (Tài Khoản)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#e2e8f0"
+        )
+        sep.grid(row=0, column=0, padx=20, pady=(12, 4), sticky="w")
+
+        outer = ctk.CTkFrame(parent, fg_color=("#0f172a", "#0f172a"), corner_radius=8)
+        outer.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(1, weight=1)
+
+        # ── Top Toolbar ──────────────────────────────────────────
+        toolbar = ctk.CTkFrame(outer, fg_color=("#1e293b", "#1e293b"), height=50)
+        toolbar.grid(row=0, column=0, padx=0, pady=(0, 0), sticky="ew")
+        toolbar.grid_columnconfigure(5, weight=1)
+
+        self.btn_add_profile = ctk.CTkButton(
+            toolbar, text="➕ Thêm Profile",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#10b981", hover_color="#059669",
+            height=32, width=120,
+            command=self._on_add_profile
+        )
+        self.btn_add_profile.grid(row=0, column=0, padx=(10, 5), pady=8)
+
+        self.btn_edit_profile = ctk.CTkButton(
+            toolbar, text="✏️ Sửa",
+            font=ctk.CTkFont(size=12),
+            fg_color="#0284c7", hover_color="#0369a1",
+            height=32, width=80,
+            state="disabled",
+            command=self._on_edit_profile
+        )
+        self.btn_edit_profile.grid(row=0, column=1, padx=5, pady=8)
+
+        self.btn_delete_profile = ctk.CTkButton(
+            toolbar, text="🗑️ Xóa",
+            font=ctk.CTkFont(size=12),
+            fg_color="#ef4444", hover_color="#dc2626",
+            height=32, width=80,
+            state="disabled",
+            command=self._on_delete_profile
+        )
+        self.btn_delete_profile.grid(row=0, column=2, padx=5, pady=8)
+
+        self.btn_login_profile = ctk.CTkButton(
+            toolbar, text="🌐 Đăng Nhập Profile",
+            font=ctk.CTkFont(size=12),
+            fg_color="#334155", hover_color="#475569",
+            height=32, width=140,
+            state="disabled",
+            command=self._on_login_profile
+        )
+        self.btn_login_profile.grid(row=0, column=3, padx=5, pady=8)
+
+        # ── Profile List ──────────────────────────────────────────
+        self.profiles_scroll = ctk.CTkFrame(
+            outer,
+            fg_color=("#0a0f1e", "#0a0f1e"),
+            corner_radius=8
+        )
+        self.profiles_scroll.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        self.profiles_scroll.grid_columnconfigure(0, weight=1)
+
+        # Column Headers
+        self._build_profile_list_header()
+
+        # ── Batch Progress Panel ────────────────────────────────────
+        self.batch_progress_frame = ctk.CTkFrame(
+            outer, fg_color=("#0f172a", "#0f172a"), corner_radius=8, height=100
+        )
+        self.batch_progress_frame.grid(row=2, column=0, padx=5, pady=(0, 5), sticky="ew")
+        self.batch_progress_frame.grid_columnconfigure(0, weight=1)
+        self.batch_progress_frame.grid_propagate(False)
+
+        self._build_batch_progress_panel()
+
+        # Tracking selected profile
+        self._selected_profile_id: Optional[str] = None
+        self._profile_row_frames: Dict[str, ctk.CTkFrame] = {}
+
+    # Keep old _build_profiles_tab as no-op to avoid errors if referenced
+    def _build_profiles_tab(self):
+        pass
+
+
+
+
+    def _build_profile_list_header(self):
+        """Xây dựng hàng tiêu đề cột cho bảng profile."""
+        header = ctk.CTkFrame(self.profiles_scroll, fg_color=("#1e293b", "#1e293b"), corner_radius=6)
+        header.grid(row=0, column=0, padx=5, pady=(5, 2), sticky="ew")
+        header.grid_columnconfigure(2, weight=1)
+        header.grid_columnconfigure(3, weight=1)
+
+        cols = [
+            ("Bật", 40), ("Tên Profile", 150), ("URL / Video ID", 0),
+            ("Thư mục Profile", 0), ("Videos", 70), ("Proxy", 120), ("Ghi chú", 120)
+        ]
+        for i, (col_name, col_w) in enumerate(cols):
+            kwargs = {"weight": 1} if col_w == 0 else {}
+            if col_w:
+                header.grid_columnconfigure(i, minsize=col_w)
+            lbl = ctk.CTkLabel(
+                header, text=col_name,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color="#64748b"
+            )
+            lbl.grid(row=0, column=i, padx=8, pady=6, sticky="w")
+
+    def _build_batch_progress_panel(self):
+        """Xây dựng panel hiển thị tiến độ Batch Run."""
+        # Row 0: label + profile counter
+        lbl_batch = ctk.CTkLabel(
+            self.batch_progress_frame,
+            text="⚡ BATCH RUN TIẾN ĐỘ",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#a855f7"
+        )
+        lbl_batch.grid(row=0, column=0, padx=15, pady=(8, 2), sticky="w")
+
+        self.lbl_batch_profile_counter = ctk.CTkLabel(
+            self.batch_progress_frame,
+            text="Chưa chạy",
+            font=ctk.CTkFont(size=11),
+            text_color="#cbd5e1"
+        )
+        self.lbl_batch_profile_counter.grid(row=0, column=1, padx=10, pady=(8, 2), sticky="w")
+
+        self.lbl_batch_stats = ctk.CTkLabel(
+            self.batch_progress_frame,
+            text="Reacted: 0  |  Skipped: 0  |  Lỗi: 0",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        )
+        self.lbl_batch_stats.grid(row=0, column=2, padx=10, pady=(8, 2), sticky="w")
+
+        # Row 1: Progress bars
+        pbar_frame = ctk.CTkFrame(self.batch_progress_frame, fg_color="transparent")
+        pbar_frame.grid(row=1, column=0, columnspan=3, padx=15, pady=(2, 8), sticky="ew")
+        pbar_frame.grid_columnconfigure(1, weight=1)
+        pbar_frame.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(pbar_frame, text="Profile:", font=ctk.CTkFont(size=10), text_color="#64748b").grid(row=0, column=0, padx=(0, 5))
+        self.batch_profile_bar = ctk.CTkProgressBar(pbar_frame, height=8, progress_color="#a855f7")
+        self.batch_profile_bar.set(0)
+        self.batch_profile_bar.grid(row=0, column=1, sticky="ew", padx=(0, 20))
+
+        ctk.CTkLabel(pbar_frame, text="Video:", font=ctk.CTkFont(size=10), text_color="#64748b").grid(row=0, column=2, padx=(0, 5))
+        self.batch_video_bar = ctk.CTkProgressBar(pbar_frame, height=8, progress_color="#38bdf8")
+        self.batch_video_bar.set(0)
+        self.batch_video_bar.grid(row=0, column=3, sticky="ew")
+
+    # ── Profile List Rendering ──────────────────────────────────────
+    def _refresh_profile_list(self):
+        """Vẽ lại toàn bộ danh sách profile."""
+        # Xóa tất cả các hàng cũ (trừ header ở row 0)
+        for widget in self.profiles_scroll.winfo_children():
+            info = widget.grid_info()
+            if info.get("row", 0) > 0:
+                widget.destroy()
+
+        self._profile_row_frames = {}
+
+        if not self.profiles:
+            empty_lbl = ctk.CTkLabel(
+                self.profiles_scroll,
+                text="Chưa có profile nào. Nhấn '➕ Thêm Profile' để tạo tài khoản mới.",
+                font=ctk.CTkFont(size=12),
+                text_color="#64748b"
+            )
+            empty_lbl.grid(row=1, column=0, padx=20, pady=30)
+            return
+
+        for idx, profile in enumerate(self.profiles):
+            self._render_profile_row(idx + 1, profile)
+
+    def _render_profile_row(self, row_idx: int, profile: ProfileConfig):
+        """Vẽ một hàng profile trong bảng danh sách."""
+        bg = "#1e293b" if row_idx % 2 == 0 else "#0f172a"
+        row = ctk.CTkFrame(self.profiles_scroll, fg_color=(bg, bg), corner_radius=6)
+        row.grid(row=row_idx, column=0, padx=5, pady=2, sticky="ew")
+        row.grid_columnconfigure(2, weight=1)
+        row.grid_columnconfigure(3, weight=1)
+
+        self._profile_row_frames[profile.id] = row
+
+        # Col 0: Enable/Disable switch
+        sw_var = ctk.BooleanVar(value=profile.enabled)
+        sw = ctk.CTkSwitch(
+            row, text="", width=46, height=22,
+            progress_color="#10b981",
+            variable=sw_var,
+            command=lambda p=profile, v=sw_var: self._on_toggle_profile(p, v)
+        )
+        if profile.enabled:
+            sw.select()
+        else:
+            sw.deselect()
+        sw.grid(row=0, column=0, padx=(10, 5), pady=8)
+
+        # Col 1: Name
+        lbl_name = ctk.CTkLabel(
+            row, text=profile.name,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#e2e8f0", anchor="w", width=145
+        )
+        lbl_name.grid(row=0, column=1, padx=5, pady=8, sticky="w")
+
+        # Col 2: URL (truncated)
+        url_short = profile.ucircle_url
+        if len(url_short) > 45:
+            url_short = url_short[:42] + "..."
+        vid_short = profile.target_video_id[:16] + "..." if len(profile.target_video_id) > 16 else profile.target_video_id
+        lbl_url = ctk.CTkLabel(
+            row, text=f"{url_short}\n📹 {vid_short}",
+            font=ctk.CTkFont(size=10),
+            text_color="#94a3b8", anchor="w", justify="left"
+        )
+        lbl_url.grid(row=0, column=2, padx=5, pady=4, sticky="w")
+
+        # Col 3: Profile dir
+        dir_short = profile.profile_dir
+        if len(dir_short) > 35:
+            dir_short = "..." + dir_short[-32:]
+        lbl_dir = ctk.CTkLabel(
+            row, text=dir_short,
+            font=ctk.CTkFont(size=10),
+            text_color="#64748b", anchor="w"
+        )
+        lbl_dir.grid(row=0, column=3, padx=5, pady=8, sticky="w")
+
+        # Col 4: Max videos
+        lbl_videos = ctk.CTkLabel(
+            row, text=str(profile.max_videos),
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#f59e0b", width=65
+        )
+        lbl_videos.grid(row=0, column=4, padx=5, pady=8)
+
+        # Col 5: Proxy status
+        proxy_text = profile.get_proxy_display() if profile.proxy and profile.proxy.is_valid() else "—"
+        proxy_color = "#10b981" if profile.proxy and profile.proxy.is_valid() else "#64748b"
+        lbl_proxy = ctk.CTkLabel(
+            row, text=proxy_text,
+            font=ctk.CTkFont(size=10),
+            text_color=proxy_color, width=115
+        )
+        lbl_proxy.grid(row=0, column=5, padx=5, pady=8)
+
+        # Col 6: Notes
+        notes_short = (profile.notes[:20] + "...") if len(profile.notes) > 20 else profile.notes
+        lbl_notes = ctk.CTkLabel(
+            row, text=notes_short or "—",
+            font=ctk.CTkFont(size=10),
+            text_color="#64748b", width=115
+        )
+        lbl_notes.grid(row=0, column=6, padx=5, pady=8)
+
+        # Click row to select
+        for widget in (row, lbl_name, lbl_url, lbl_dir, lbl_videos, lbl_proxy, lbl_notes):
+            widget.bind("<Button-1>", lambda e, pid=profile.id: self._select_profile(pid))
+
+    def _select_profile(self, profile_id: str):
+        """Chọn một profile trong danh sách."""
+        # Bỏ highlight cũ
+        if self._selected_profile_id and self._selected_profile_id in self._profile_row_frames:
+            old_frame = self._profile_row_frames[self._selected_profile_id]
+            try:
+                old_frame.configure(border_width=0)
+            except Exception:
+                pass
+
+        self._selected_profile_id = profile_id
+        # Highlight mới
+        if profile_id in self._profile_row_frames:
+            self._profile_row_frames[profile_id].configure(border_width=2, border_color="#0284c7")
+
+        # Bật các nút hành động
+        self.btn_edit_profile.configure(state="normal")
+        self.btn_delete_profile.configure(state="normal")
+        self.btn_login_profile.configure(state="normal")
+
+    def _on_toggle_profile(self, profile: ProfileConfig, var: ctk.BooleanVar):
+        """Bật/tắt profile trong danh sách."""
+        profile.enabled = var.get()
+        save_profiles(self.profiles)
+
+    # ── Profile CRUD ────────────────────────────────────────────────
+    def _on_add_profile(self):
+        new_p = create_profile(name=f"Profile {len(self.profiles) + 1}")
+        self._show_profile_dialog(new_p, is_new=True)
+
+    def _on_edit_profile(self):
+        if not self._selected_profile_id:
+            return
+        profile = next((p for p in self.profiles if p.id == self._selected_profile_id), None)
+        if profile:
+            self._show_profile_dialog(profile, is_new=False)
+
+    def _on_delete_profile(self):
+        if not self._selected_profile_id:
+            return
+        profile = next((p for p in self.profiles if p.id == self._selected_profile_id), None)
+        if not profile:
+            return
+        # Xác nhận xóa
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Xác Nhận Xóa")
+        dialog.geometry("400x160")
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"Bạn có chắc muốn xóa profile\n「{profile.name}」?",
+            font=ctk.CTkFont(size=13),
+            text_color="#e2e8f0"
+        ).pack(pady=(20, 10))
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(pady=10)
+
+        def do_delete():
+            self.profiles = delete_profile(self.profiles, profile.id)
+            save_profiles(self.profiles)
+            self._selected_profile_id = None
+            self.btn_edit_profile.configure(state="disabled")
+            self.btn_delete_profile.configure(state="disabled")
+            self.btn_login_profile.configure(state="disabled")
+            self._refresh_profile_list()
+            self._append_log(f"Đã xóa profile: [{profile.name}]", "WARNING")
+            dialog.destroy()
+
+        ctk.CTkButton(btn_frame, text="🗑️ Xóa", fg_color="#ef4444", hover_color="#dc2626",
+                      width=100, command=do_delete).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Hủy", fg_color="#334155", hover_color="#475569",
+                      width=100, command=dialog.destroy).pack(side="left", padx=10)
+
+    def _on_login_profile(self):
+        """Mở browser riêng cho profile được chọn để đăng nhập thủ công."""
+        if not self._selected_profile_id:
+            return
+        profile = next((p for p in self.profiles if p.id == self._selected_profile_id), None)
+        if not profile:
+            return
+
+        def run_browser():
+            self._append_log(f"Đang mở trình duyệt cho profile [{profile.name}]...", "INFO")
+            proxy = profile.proxy.to_playwright_proxy() if profile.proxy and profile.proxy.is_valid() else None
+
+            async def _launch():
+                async with async_playwright() as p:
+                    browser = await launch_browser(
+                        p, headless=False,
+                        profile_dir=profile.profile_dir,
+                        proxy=proxy
+                    )
+                    page = browser.pages[0] if browser.pages else await browser.new_page()
+                    url = profile.ucircle_url or "https://ucircle.net"
+                    await page.goto(url)
+                    self._append_log(f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập rồi đóng cửa sổ.", "INFO")
+                    while browser.is_connected():
+                        await asyncio.sleep(1)
+                    self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã lưu.", "INFO")
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_launch())
+            except Exception as e:
+                self._append_log(f"Lỗi mở trình duyệt [{profile.name}]: {e}", "ERROR")
+            finally:
+                loop.close()
+
+        threading.Thread(target=run_browser, daemon=True).start()
+
+    # ── Profile Dialog (Add / Edit) ──────────────────────────────────
+    def _show_profile_dialog(self, profile: ProfileConfig, is_new: bool = True):
+        """Hiển thị dialog form để thêm hoặc sửa thông tin profile."""
+        dialog = ctk.CTkToplevel(self)
+        title_str = "➕ Thêm Profile Mới" if is_new else f"✏️ Sửa Profile: {profile.name}"
+        dialog.title(title_str)
+        dialog.geometry("660x680")
+        dialog.grab_set()
+        dialog.resizable(True, True)
+
+        # Scrollable form
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=15, pady=10)
+        scroll.grid_columnconfigure(1, weight=1)
+
+        def make_label(row, text):
+            ctk.CTkLabel(scroll, text=text, font=ctk.CTkFont(size=12),
+                         text_color="#94a3b8", anchor="e").grid(
+                row=row, column=0, padx=(5, 10), pady=6, sticky="e")
+
+        def make_entry(row, default="", placeholder="", width=None):
+            e = ctk.CTkEntry(scroll, font=ctk.CTkFont(size=12),
+                             height=32, placeholder_text=placeholder)
+            if width:
+                e.configure(width=width)
+            e.grid(row=row, column=1, padx=(0, 10), pady=6, sticky="ew")
+            if default:
+                e.insert(0, default)
+            return e
+
+        # ── Section: Thông tin cơ bản ────────────────────────────
+        ctk.CTkLabel(scroll, text="— Thông Tin Cơ Bản —",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#38bdf8").grid(row=0, column=0, columnspan=2, pady=(5, 2), sticky="w", padx=5)
+
+        make_label(1, "Tên Profile:")
+        e_name = make_entry(1, profile.name, "Ví dụ: Tài khoản 1")
+
+        make_label(2, "Ghi chú:")
+        e_notes = make_entry(2, profile.notes, "Ghi chú tùy ý...")
+
+        # ── Section: UCircle URL ─────────────────────────────────
+        ctk.CTkLabel(scroll, text="— UCircle URL & Video ─",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#38bdf8").grid(row=3, column=0, columnspan=2, pady=(10, 2), sticky="w", padx=5)
+
+        make_label(4, "URL UCircle:")
+        e_url = make_entry(4, profile.ucircle_url,
+                           "https://ucircle.net/app/c/...?v=...")
+
+        make_label(6, "Số Video Tối Đa:")
+        e_max = make_entry(6, str(profile.max_videos), "100")
+
+        # ── Section: Chế Độ Chạy ─────────────────────────────────
+        ctk.CTkLabel(scroll, text="— Chế Độ Chạy & Thời Gian —",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#38bdf8").grid(row=7, column=0, columnspan=2, pady=(10, 2), sticky="w", padx=5)
+
+        make_label(8, "Mục tiêu:")
+        seg_target = ctk.CTkSegmentedButton(
+            scroll,
+            values=["🎥 Video Ngắn (Wavee)", "📰 Bảng Tin (Feed)"],
+            font=ctk.CTkFont(size=11)
+        )
+        seg_target.set("📰 Bảng Tin (Feed)" if profile.target_type == "feed" else "🎥 Video Ngắn (Wavee)")
+        seg_target.grid(row=8, column=1, padx=(0, 10), pady=6, sticky="ew")
+
+        make_label(9, "Chế độ:")
+        seg_react_mode = ctk.CTkSegmentedButton(
+            scroll,
+            values=["⚡ Chỉ Thả Ngũ Hành (Nhanh)", "👁 Xem Video rồi Thả"],
+            font=ctk.CTkFont(size=11)
+        )
+        seg_react_mode.set("⚡ Chỉ Thả Ngũ Hành (Nhanh)" if profile.react_only else "👁 Xem Video rồi Thả")
+        seg_react_mode.grid(row=9, column=1, padx=(0, 10), pady=6, sticky="ew")
+
+        make_label(10, "Ngũ Hành:")
+        elem_map = {
+            "shuffle": "🎲Ngẫu nhiên (Shuffle)",
+            "hoa": "🔥Hỏa (hoa)",
+            "tho": "🏔️Thổ (tho)",
+            "kim": "⚔️Kim (kim)",
+            "thuy": "💧Thủy (thuy)",
+            "moc": "🌲Mộc (moc)"
+        }
+        elem_rev = {v: k for k, v in elem_map.items()}
+        combo_elem = ctk.CTkComboBox(
+            scroll,
+            values=list(elem_map.values()),
+            font=ctk.CTkFont(size=11)
+        )
+        combo_elem.set(elem_map.get(profile.element_mode, elem_map["shuffle"]))
+        combo_elem.grid(row=10, column=1, padx=(0, 10), pady=6, sticky="w")
+
+        make_label(11, "Thời gian xem (s):")
+        watch_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        watch_frame.grid(row=11, column=1, padx=(0, 10), pady=6, sticky="w")
+        e_watch_min = ctk.CTkEntry(watch_frame, width=60, height=32, font=ctk.CTkFont(size=12))
+        e_watch_min.insert(0, str(profile.watch_min_seconds))
+        e_watch_min.grid(row=0, column=0, padx=(0, 5))
+        ctk.CTkLabel(watch_frame, text="đến", font=ctk.CTkFont(size=12)).grid(row=0, column=1, padx=5)
+        e_watch_max = ctk.CTkEntry(watch_frame, width=60, height=32, font=ctk.CTkFont(size=12))
+        e_watch_max.insert(0, str(profile.watch_max_seconds))
+        e_watch_max.grid(row=0, column=2, padx=(5, 0))
+
+        make_label(12, "Độ trễ (s):")
+        delay_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        delay_frame.grid(row=12, column=1, padx=(0, 10), pady=6, sticky="w")
+        e_delay_min = ctk.CTkEntry(delay_frame, width=60, height=32, font=ctk.CTkFont(size=12))
+        e_delay_min.insert(0, str(profile.action_delay_min))
+        e_delay_min.grid(row=0, column=0, padx=(0, 5))
+        ctk.CTkLabel(delay_frame, text="đến", font=ctk.CTkFont(size=12)).grid(row=0, column=1, padx=5)
+        e_delay_max = ctk.CTkEntry(delay_frame, width=60, height=32, font=ctk.CTkFont(size=12))
+        e_delay_max.insert(0, str(profile.action_delay_max))
+        e_delay_max.grid(row=0, column=2, padx=(5, 0))
+
+        # ── Section: Profile Directory ───────────────────────────
+        ctk.CTkLabel(scroll, text="— Thư Mục Profile (Browser Session) —",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#38bdf8").grid(row=13, column=0, columnspan=2, pady=(10, 2), sticky="w", padx=5)
+
+        make_label(14, "Thư mục Profile:")
+        dir_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        dir_frame.grid(row=14, column=1, padx=(0, 10), pady=6, sticky="ew")
+        dir_frame.grid_columnconfigure(0, weight=1)
+
+        e_dir = ctk.CTkEntry(dir_frame, font=ctk.CTkFont(size=12), height=32,
+                             placeholder_text="./browser-profile/profile_name")
+        e_dir.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        if profile.profile_dir:
+            e_dir.insert(0, profile.profile_dir)
+
+        def _auto_dir():
+            name = e_name.get().strip() or "profile"
+            safe = "".join(c if c.isalnum() else "_" for c in name.lower())[:20]
+            e_dir.delete(0, "end")
+            e_dir.insert(0, f"./browser-profile/{safe}_{profile.id}")
+        ctk.CTkButton(dir_frame, text="Tự động", width=70, height=32,
+                      fg_color="#334155", hover_color="#475569",
+                      command=_auto_dir).grid(row=0, column=1)
+
+        # ── Bottom Buttons ───────────────────────────────────────
+        btn_frame = ctk.CTkFrame(dialog, fg_color=("#0f172a", "#0f172a"), height=55)
+        btn_frame.pack(fill="x", padx=15, pady=(0, 10))
+
+        lbl_err = ctk.CTkLabel(btn_frame, text="", font=ctk.CTkFont(size=11),
+                               text_color="#ef4444")
+        lbl_err.pack(side="left", padx=15, pady=10)
+
+        def do_save():
+            # Lấy giá trị từ form
+            name_val = e_name.get().strip()
+            if not name_val:
+                lbl_err.configure(text="⚠ Tên profile không được để trống!")
+                return
+
+            url_val = e_url.get().strip()
+            vid_val = extract_url_details(url_val).get("video_id") or ""
+            try:
+                max_v = int(e_max.get().strip() or "100")
+            except ValueError:
+                max_v = 100
+
+            dir_val = e_dir.get().strip()
+            if not dir_val:
+                safe = "".join(c if c.isalnum() else "_" for c in name_val.lower())[:20]
+                dir_val = f"./browser-profile/{safe}_{profile.id}"
+
+            # Cập nhật profile object
+            profile.name = name_val
+            profile.notes = e_notes.get().strip()
+            profile.ucircle_url = url_val
+            profile.target_video_id = vid_val
+            profile.max_videos = max_v
+            profile.profile_dir = dir_val
+            profile.proxy = None
+            profile.target_type = "feed" if seg_target.get() == "📰 Bảng Tin (Feed)" else "wavee"
+            profile.react_only = (seg_react_mode.get() == "⚡ Chỉ Thả Ngũ Hành (Nhanh)")
+            profile.element_mode = elem_rev.get(combo_elem.get(), "shuffle")
+            try:
+                profile.watch_min_seconds = int(e_watch_min.get().strip() or "2")
+                profile.watch_max_seconds = int(e_watch_max.get().strip() or "5")
+                profile.action_delay_min = int(e_delay_min.get().strip() or "1")
+                profile.action_delay_max = int(e_delay_max.get().strip() or "3")
+            except ValueError:
+                pass
+
+            if is_new:
+                self.profiles.append(profile)
+                self._append_log(f"Đã thêm profile mới: [{profile.name}]", "INFO")
+            else:
+                self.profiles = update_profile(self.profiles, profile)
+                self._append_log(f"Đã cập nhật profile: [{profile.name}]", "INFO")
+
+            save_profiles(self.profiles)
+            self._refresh_profile_list()
+            dialog.destroy()
+
+        ctk.CTkButton(
+            btn_frame, text="💾 Lưu Profile",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#0284c7", hover_color="#0369a1",
+            height=36, width=130, command=do_save
+        ).pack(side="right", padx=(5, 15), pady=8)
+
+        ctk.CTkButton(
+            btn_frame, text="Hủy",
+            font=ctk.CTkFont(size=12),
+            fg_color="#334155", hover_color="#475569",
+            height=36, width=80, command=dialog.destroy
+        ).pack(side="right", padx=5, pady=8)
+
+    # ── Batch Run ───────────────────────────────────────────────────
+    def _on_batch_start(self):
+        """Bắt đầu Batch Run với tất cả profile đang bật."""
+        if self.is_running:
+            self._append_log("Đang có phiên chạy. Vui lòng dừng trước khi chạy Batch.", "WARNING")
+            return
+
+        enabled = get_enabled_profiles(self.profiles)
+        if not enabled:
+            self._append_log("Không có profile nào đang bật. Hãy bật ít nhất 1 profile.", "WARNING")
+            return
+
+        # Lấy cấu hình gốc từ UI
+        base_cfg = self._get_ui_config()
+        errors = validate_config(base_cfg)
+        # Bỏ qua lỗi URL vì mỗi profile có URL riêng
+        errors = [e for e in errors if "URL" not in e]
+        if errors:
+            self._append_log("Cấu hình cơ sở có lỗi: " + "; ".join(errors), "ERROR")
+            return
+
+        self.is_running = True
+        self.btn_start.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.btn_pause.configure(state="disabled")
+        self._update_status_badge("⚡ BATCH RUN", "#4c1d95", "#a855f7")
+
+        self._append_log(f"══ Bắt đầu Batch Run: {len(enabled)} profile ══", "INFO")
+
+        self.batch_engine = BatchEngine(base_cfg, enabled)
+        self.batch_engine.on_log = lambda msg, lvl: self._append_log(msg, lvl)
+        self.batch_engine.on_batch_progress = lambda stats: self.after(0, self._update_batch_progress_ui, stats)
+        self.batch_engine.on_profile_start = lambda p, i, t: self._append_log(
+            f"▶ [{i}/{t}] Bắt đầu profile: {p.name}", "INFO"
+        )
+        self.batch_engine.on_profile_finish = lambda p, st: self._append_log(
+            f"✓ Hoàn thành profile: {p.name}", "INFO"
+        )
+        self.batch_engine.on_batch_finish = self._on_batch_finished
+
+        self.worker_thread = threading.Thread(target=self._run_batch_thread, daemon=True)
+        self.worker_thread.start()
+
+    def _run_batch_thread(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self.batch_engine.run())
+        finally:
+            loop.close()
+
+    def _on_batch_stop(self):
+        if self.batch_engine and self.is_running:
+            self.btn_stop.configure(state="disabled")
+            self._update_status_badge("● ĐANG DỪNG BATCH...", "#7f1d1d", "#ef4444")
+            self.batch_engine.request_stop()
+
+    def _on_batch_finished(self, stats: Dict[str, Any]):
+        def handle():
+            self.is_running = False
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
+            self.btn_pause.configure(state="disabled")
+            self._update_status_badge("● HOÀN THÀNH", "#064e3b", "#10b981")
+            self._append_log(
+                f"🏁 Batch kết thúc: {stats.get('completed_profiles', 0)}/{stats.get('total_profiles', 0)} profile | "
+                f"Tổng Reacted: {stats.get('total_reacted', 0)} | "
+                f"Skipped: {stats.get('total_skipped', 0)}",
+                "INFO"
+            )
+        self.after(0, handle)
+
+    def _update_batch_progress_ui(self, stats: Dict[str, Any]):
+        """Cập nhật Batch Progress Panel trên UI."""
+        total_p = stats.get("total_profiles", 1)
+        current_p = stats.get("current_profile_index", 0)
+        name = stats.get("current_profile_name", "—")
+        reacted = stats.get("total_reacted", 0)
+        skipped = stats.get("total_skipped", 0)
+        errors = stats.get("total_errors", 0)
+
+        vid_cur = stats.get("current_profile_video_current", 0)
+        vid_tot = stats.get("current_profile_video_total", 1)
+
+        self.lbl_batch_profile_counter.configure(
+            text=f"Profile {current_p}/{total_p}: {name}"
+        )
+        self.lbl_batch_stats.configure(
+            text=f"Tổng Reacted: {reacted}  |  Skipped: {skipped}  |  Lỗi: {errors}"
+        )
+        self.batch_profile_bar.set(current_p / max(total_p, 1))
+        self.batch_video_bar.set(vid_cur / max(vid_tot, 1))
+
     # -------------------------------------------------------------
     # HELPER LOGIC: CONFIG & UI BINDING
     # -------------------------------------------------------------
     def _load_config_to_ui(self):
         """Đưa toàn bộ dữ liệu cấu hình vào UI Controls"""
         cfg = self.config
-        self.entry_url.delete(0, "end")
-        self.entry_url.insert(0, cfg.ucircle_url)
-
-        self.entry_video_id.delete(0, "end")
-        self.entry_video_id.insert(0, cfg.target_video_id or "")
-
-        if cfg.react_only:
-            self.seg_react_mode.set("Chỉ Thả Ngũ Hành (Nhanh)")
-        else:
-            self.seg_react_mode.set("Xem Video rồi Thả Ngũ Hành")
-
-        # Element combo
-        elem_map = {
-            "shuffle": "🎲 Ngẫu nhiên 5 hệ (Shuffle bag)",
-            "hoa": "🔥 Hệ Hỏa (hoa)",
-            "tho": "🏔️ Hệ Thổ (tho)",
-            "kim": "⚔️ Hệ Kim (kim)",
-            "thuy": "💧 Hệ Thủy (thuy)",
-            "moc": "🌲 Hệ Mộc (moc)"
-        }
-        self.combo_element.set(elem_map.get(cfg.element_mode, elem_map["shuffle"]))
-
-        self.entry_max_videos.delete(0, "end")
-        self.entry_max_videos.insert(0, str(cfg.max_videos))
-
-        self.entry_watch_min.delete(0, "end")
-        self.entry_watch_min.insert(0, str(cfg.watch_min_seconds))
-
-        self.entry_watch_max.delete(0, "end")
-        self.entry_watch_max.insert(0, str(cfg.watch_max_seconds))
-
-        self.entry_delay_min.delete(0, "end")
-        self.entry_delay_min.insert(0, str(cfg.action_delay_min))
-
-        self.entry_delay_max.delete(0, "end")
-        self.entry_delay_max.insert(0, str(cfg.action_delay_max))
 
         if cfg.dry_run:
             self.sw_dry_run.select()
@@ -683,93 +1179,14 @@ class UCircleAutomationGUI(ctk.CTk):
         self.entry_profile_dir.delete(0, "end")
         self.entry_profile_dir.insert(0, cfg.profile_dir)
 
-        self._on_react_mode_toggle(self.seg_react_mode.get())
-
     def _get_ui_config(self) -> AppConfig:
         """Lấy cấu hình hiện tại từ các trường trên giao diện"""
-        elem_val = self.combo_element.get()
-        elem_mode = "shuffle"
-        if "hoa" in elem_val.lower():
-            elem_mode = "hoa"
-        elif "tho" in elem_val.lower():
-            elem_mode = "tho"
-        elif "kim" in elem_val.lower():
-            elem_mode = "kim"
-        elif "thuy" in elem_val.lower():
-            elem_mode = "thuy"
-        elif "moc" in elem_val.lower():
-            elem_mode = "moc"
-
-        try:
-            max_v = int(self.entry_max_videos.get().strip())
-        except ValueError:
-            max_v = 1000
-
-        try:
-            w_min = int(self.entry_watch_min.get().strip())
-        except ValueError:
-            w_min = 2
-
-        try:
-            w_max = int(self.entry_watch_max.get().strip())
-        except ValueError:
-            w_max = 3
-
-        try:
-            d_min = int(self.entry_delay_min.get().strip())
-        except ValueError:
-            d_min = 1
-
-        try:
-            d_max = int(self.entry_delay_max.get().strip())
-        except ValueError:
-            d_max = 3
-
         return AppConfig(
-            ucircle_url=self.entry_url.get().strip(),
-            target_video_id=self.entry_video_id.get().strip(),
-            react_only=(self.seg_react_mode.get() == "Chỉ Thả Ngũ Hành (Nhanh)"),
-            watch_min_seconds=w_min,
-            watch_max_seconds=w_max,
-            action_delay_min=d_min,
-            action_delay_max=d_max,
-            max_videos=max_v,
             headless=bool(self.sw_headless.get()),
             dry_run=bool(self.sw_dry_run.get()),
             profile_dir=self.entry_profile_dir.get().strip() or "./browser-profile",
-            element_mode=elem_mode
         )
 
-    def _on_url_changed(self, event=None):
-        """Khi người dùng dán hoặc gõ URL, tự động trích xuất Video ID"""
-        raw_url = self.entry_url.get().strip()
-        details = extract_url_details(raw_url)
-        if details["video_id"]:
-            self.entry_video_id.delete(0, "end")
-            self.entry_video_id.insert(0, details["video_id"])
-
-    def _on_react_mode_toggle(self, value):
-        """Bật/tắt các ô thời gian xem video tùy theo chế độ"""
-        if value == "Chỉ Thả Ngũ Hành (Nhanh)":
-            self.entry_watch_min.configure(state="disabled", fg_color="#1e293b")
-            self.entry_watch_max.configure(state="disabled", fg_color="#1e293b")
-            self.lbl_watch_time.configure(text_color="#64748b")
-        else:
-            self.entry_watch_min.configure(state="normal", fg_color="#0f172a")
-            self.entry_watch_max.configure(state="normal", fg_color="#0f172a")
-            self.lbl_watch_time.configure(text_color="#94a3b8")
-
-    def _apply_preset(self, preset_name: str):
-        presets = get_presets()
-        if preset_name in presets:
-            preset = presets[preset_name]
-            # Giữ lại URL và profile_dir hiện tại
-            preset.ucircle_url = self.entry_url.get().strip()
-            preset.target_video_id = self.entry_video_id.get().strip()
-            preset.profile_dir = self.entry_profile_dir.get().strip()
-            self.config = preset
-            self._load_config_to_ui()
-            self._append_log(f"Đã áp dụng cấu hình Preset: [{preset_name.upper()}]", "INFO")
 
     def _save_ui_to_config(self):
         new_cfg = self._get_ui_config()

@@ -21,6 +21,7 @@ class AppConfig:
     dry_run: bool = False
     profile_dir: str = "./browser-profile"
     element_mode: str = "shuffle"  # "shuffle", "hoa", "tho", "kim", "thuy", "moc"
+    target_type: str = "wavee"      # "wavee" | "feed"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

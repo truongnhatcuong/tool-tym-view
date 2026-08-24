@@ -13,7 +13,14 @@ def setup_logger():
         
     formatter = logging.Formatter('%(asctime)s %(levelname)s  %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     
-    file_handler = logging.FileHandler("logs/session.log", encoding='utf-8')
+    from logging.handlers import RotatingFileHandler
+    
+    file_handler = RotatingFileHandler(
+        "logs/session.log", 
+        maxBytes=5*1024*1024, # 5 MB
+        backupCount=3,
+        encoding='utf-8'
+    )
     file_handler.setFormatter(formatter)
     
     stream_handler = logging.StreamHandler(sys.stdout)

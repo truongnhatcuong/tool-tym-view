@@ -105,7 +105,10 @@ async def _is_logged_in(page: Page) -> bool:
 async def ensure_login(page: Page, wait_timeout_seconds: int = 900):
     logger.info("Checking login state...")
     try:
-        await page.wait_for_load_state("networkidle", timeout=20000)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
 
         if await _is_logged_in(page):
             logger.info("Login state already detected. Continuing automation.")
@@ -115,15 +118,6 @@ async def ensure_login(page: Page, wait_timeout_seconds: int = 900):
         print("Please login manually in the browser.")
         print("Then either press ENTER in this terminal or wait for the script to continue automatically.")
         print("=" * 60 + "\n")
-
-        if sys.stdin is not None and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
-            try:
-                print("If you already logged in, press ENTER now to continue anyway.")
-                await asyncio.to_thread(input, "")
-                logger.info("User pressed Enter; forcing continuation after manual login override.")
-                return
-            except EOFError:
-                logger.warning("stdin closed unexpectedly; continuing with browser-login wait loop.")
 
         logger.info("Waiting for the authenticated UCircle app UI to appear after login...")
         deadline = time.monotonic() + wait_timeout_seconds

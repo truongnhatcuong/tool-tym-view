@@ -5,14 +5,29 @@ from utils.helpers import random_delay
 
 async def switch_to_wavee_tab(page: Page) -> bool:
     logger.info("Switching to Wavee tab...")
-    wavee_btn = page.locator(UCircleSelectors.WAVEE_TAB_BTN)
+    tab_locators = [
+        page.get_by_text("Wavee", exact=True),
+        page.locator('a:has-text("Wavee")').first,
+        page.locator('button:has-text("Wavee")').first,
+        page.locator('[role="tab"]:has-text("Wavee")').first,
+        page.locator('button[data-tool="wavee"], [data-tool="wavee"], a[data-tool="wavee"]').first,
+    ]
     try:
-        await wavee_btn.wait_for(state="visible", timeout=15000)
-        await wavee_btn.click()
-        logger.info("Clicked on Wavee tab successfully.")
-        await page.wait_for_load_state("networkidle", timeout=20000)
-        await page.wait_for_timeout(2500)
-        return True
+        for loc in tab_locators:
+            try:
+                if await loc.count() > 0 and await loc.is_visible():
+                    await loc.click(timeout=5000)
+                    logger.info("Clicked on Wavee tab successfully.")
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(1500)
+                    return True
+            except Exception:
+                continue
+        logger.error("Wavee tab not found with any selector.")
+        return False
     except Exception as e:
         logger.error(f"Wavee tab not found or failed to click: {e}")
         return False

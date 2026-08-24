@@ -15,7 +15,15 @@ def _normalize_element_name(value: str | None) -> str:
     if value is None:
         return ""
     normalized = value.strip().lower().replace(" ", "")
+    # Xử lý các từ khóa tiền tố/hậu tố nếu có trong aria-label
+    normalized = normalized.replace("cộnghưởng", "").replace("conghuong", "")
+    
+    # Chuẩn hóa unicode
     normalized = normalized.replace("thuỷ", "thuy").replace("thủy", "thuy").replace("thuy", "thuy")
+    normalized = normalized.replace("hoả", "hoa").replace("hỏa", "hoa").replace("hõa", "hoa")
+    normalized = normalized.replace("thổ", "tho")
+    normalized = normalized.replace("mộc", "moc")
+    
     return normalized
 
 
@@ -126,15 +134,24 @@ async def react_element_if_needed(page: Page, dry_run: bool = True, element_mode
             await react_button.click()
             logger.info("React button clicked. Waiting for picker to appear...")
             
-            # Đợi bảng chọn hiện ra
-            picker_id = await react_button.get_attribute("aria-controls")
-            if picker_id:
-                picker = page.locator(f'#{picker_id}')
-            else:
-                picker = page.locator(
-                    f'section[data-wavee-video-id="{active_video_id}"] {UCircleSelectors.REACT_PICKER}'
-                ).first if active_video_id else page.locator(UCircleSelectors.REACT_PICKER).first
-            await picker.wait_for(state="visible", timeout=8000)
+            # Đợi bảng chọn hiện ra, có thử lại 3 lần nếu không thấy
+            picker = None
+            for attempt in range(3):
+                picker_id = await react_button.get_attribute("aria-controls")
+                if picker_id:
+                    picker = page.locator(f'#{picker_id}')
+                else:
+                    picker = page.locator(
+                        f'section[data-wavee-video-id="{active_video_id}"] {UCircleSelectors.REACT_PICKER}'
+                    ).first if active_video_id else page.locator(UCircleSelectors.REACT_PICKER).first
+                
+                try:
+                    await picker.wait_for(state="visible", timeout=3000)
+                    break
+                except Exception:
+                    logger.warning(f"Reaction picker not visible on attempt {attempt+1}. Retrying click...")
+                    await react_button.click(force=True)
+                    await random_delay(1, 2)
 
             # Lấy danh sách các nút ngũ hành bên trong đúng picker vừa mở
             elements = picker.locator(UCircleSelectors.REACT_ELEMENTS)

@@ -6,14 +6,22 @@ from config_manager import AppConfig, extract_url_details
 from automation.browser import launch_browser
 from automation.login import ensure_login
 from automation.feed import switch_to_wavee_tab, click_specific_video
+from automation.feed_actions import switch_to_feed_tab, scroll_feed, scroll_to_top_feed, click_load_more_if_available
 from automation.video import watch_video
-from automation.actions import react_element_if_needed, scroll_to_next_video, is_video_already_reacted
+from automation.actions import react_element_if_needed, scroll_to_next_video, is_video_already_reacted, _draw_element, _normalize_element_name
 from utils.logger import logger
 from utils.helpers import random_delay
 
 class AutomationEngine:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, proxy: Optional[Dict[str, str]] = None):
+        """
+        Args:
+            config: Cấu hình chạy.
+            proxy:  Proxy dạng Playwright dict ({"server": ..., "username": ..., "password": ...}).
+                    None = không dùng proxy.
+        """
         self.config = config
+        self.proxy = proxy  # Proxy riêng cho engine này (từ ProfileConfig)
         self.is_running = False
         self.is_paused = False
         self._stop_requested = False
@@ -26,7 +34,7 @@ class AutomationEngine:
             "start_time": 0.0,
             "elapsed_seconds": 0
         }
-        
+
         # Callbacks cho GUI / CLI
         self.on_status_change: Optional[Callable[[str], None]] = None
         self.on_progress: Optional[Callable[[int, int, Dict[str, Any]], None]] = None
@@ -112,10 +120,13 @@ class AutomationEngine:
         try:
             async with async_playwright() as p:
                 self._emit_log("Khởi động Playwright Chromium...", "INFO")
+                if self.proxy:
+                    self._emit_log(f"Proxy: {self.proxy.get('server', '')}", "INFO")
                 browser = await launch_browser(
-                    p, 
-                    headless=self.config.headless, 
-                    profile_dir=self.config.profile_dir
+                    p,
+                    headless=self.config.headless,
+                    profile_dir=self.config.profile_dir,
+                    proxy=self.proxy
                 )
 
                 if not await self._check_control_flags():
@@ -137,85 +148,11 @@ class AutomationEngine:
                 if not await self._check_control_flags():
                     return
 
-                self._set_status("Chuyển sang tab Wavee...")
-                success_tab = await switch_to_wavee_tab(page)
-                if not success_tab:
-                    msg = "Không thể chuyển sang tab Wavee."
-                    self._emit_log(msg, "ERROR")
-                    logger.error(msg)
-                    if self.on_error:
-                        self.on_error(msg)
-                    return
-
-                if not await self._check_control_flags():
-                    return
-
-                self._set_status(f"Mở video khởi đầu ({target_video_id[:8]}...)...")
-                self._emit_log(f"Tìm và mở video mục tiêu: {target_video_id}", "INFO")
-                success_video = await click_specific_video(page, target_video_id)
-
-                if not success_video:
-                    self._emit_log("Không tìm thấy video khởi đầu cụ thể, thử tiếp tục với video hiện có...", "WARNING")
-
-                max_videos = self.config.max_videos
-                for index in range(max_videos):
-                    if not await self._check_control_flags():
-                        self._emit_log("Tiến trình đã được dừng bởi người dùng.", "WARNING")
-                        break
-
-                    self.stats["current"] = index + 1
-                    self._emit_progress()
-                    self._set_status(f"Đang xử lý video {index + 1}/{max_videos}")
-                    self._emit_log(f"--- Đang xử lý video {index + 1}/{max_videos} ---", "INFO")
-                    logger.info(f"--- Processing video {index + 1}/{max_videos} ---")
-
-                    try:
-                        already_done = await is_video_already_reacted(page)
-                        if already_done:
-                            self.stats["skipped"] += 1
-                            self._emit_log("Video đã được thả ngũ hành trước đó. Bỏ qua.", "INFO")
-                            logger.info("Video already reacted. Skipping.")
-                        else:
-                            if self.config.react_only:
-                                self._emit_log("Chế độ React ngay: Bỏ qua bước chờ xem, tương tác ngay.", "INFO")
-                            else:
-                                self._set_status(f"Đang xem video {index + 1}...")
-                                self._emit_log(f"Đang xem video ({self.config.watch_min_seconds}s - {self.config.watch_max_seconds}s)...", "INFO")
-                                await watch_video(page, self.config.watch_min_seconds, self.config.watch_max_seconds)
-
-                            if not await self._check_control_flags():
-                                break
-
-                            self._set_status(f"Đang thả ngũ hành video {index + 1}...")
-                            success, status_code = await react_element_if_needed(
-                                page, 
-                                dry_run=self.config.dry_run, 
-                                element_mode=self.config.element_mode
-                            )
-                            
-                            if success:
-                                self.stats["reacted"] += 1
-                                self._emit_log(f"Thả ngũ hành thành công ({status_code})!", "INFO")
-                            elif status_code == "already_reacted":
-                                self.stats["skipped"] += 1
-                                self._emit_log("Video đã có reaction. Bỏ qua.", "INFO")
-                            else:
-                                self.stats["errors"] += 1
-                                self._emit_log(f"Không thể thả ngũ hành: {status_code}", "WARNING")
-                    except Exception as e:
-                        self.stats["errors"] += 1
-                        err_msg = f"Lỗi xử lý video {index + 1}: {e}"
-                        self._emit_log(err_msg, "ERROR")
-                        logger.error(err_msg)
-
-                    self._emit_progress()
-
-                    if index < max_videos - 1:
-                        if not await self._check_control_flags():
-                            break
-                        self._set_status("Chuyển sang video tiếp theo...")
-                        await scroll_to_next_video(page)
-                        await random_delay(self.config.action_delay_min, self.config.action_delay_max)
+                target_type = self.config.target_type
+                if target_type == "feed":
+                    await self._run_feed_mode(page, browser)
+                else:
+                    await self._run_wavee_mode(page, target_video_id, browser)
 
                 self._set_status("Hoàn thành phiên chạy!")
                 self._emit_log(f"Hoàn thành phiên chạy! Tổng: {self.stats['current']}, Reacted: {self.stats['reacted']}, Skipped: {self.stats['skipped']}, Errors: {self.stats['errors']}", "INFO")
@@ -240,3 +177,358 @@ class AutomationEngine:
                     self.on_finish(self.stats)
                 except Exception:
                     pass
+
+    async def _run_wavee_mode(self, page, target_video_id, browser):
+        self._set_status("Chuyển sang tab Wavee...")
+        success_tab = await switch_to_wavee_tab(page)
+        if not success_tab:
+            msg = "Không thể chuyển sang tab Wavee."
+            self._emit_log(msg, "ERROR")
+            logger.error(msg)
+            if self.on_error:
+                self.on_error(msg)
+            return
+
+        if not await self._check_control_flags():
+            return
+
+        self._set_status(f"Mở video khởi đầu ({target_video_id[:8]}...)...")
+        self._emit_log(f"Tìm và mở video mục tiêu: {target_video_id}", "INFO")
+        success_video = await click_specific_video(page, target_video_id)
+
+        if not success_video:
+            self._emit_log("Không tìm thấy video khởi đầu cụ thể, thử tiếp tục với video hiện có...", "WARNING")
+
+        max_videos = self.config.max_videos
+        for index in range(max_videos):
+            if not await self._check_control_flags():
+                self._emit_log("Tiến trình đã được dừng bởi người dùng.", "WARNING")
+                break
+
+            self.stats["current"] = index + 1
+            self._emit_progress()
+            self._set_status(f"Đang xử lý video {index + 1}/{max_videos}")
+            self._emit_log(f"--- Đang xử lý video {index + 1}/{max_videos} ---", "INFO")
+            logger.info(f"--- Processing video {index + 1}/{max_videos} ---")
+
+            try:
+                already_done = await is_video_already_reacted(page)
+                if already_done:
+                    self.stats["skipped"] += 1
+                    self._emit_log("Video đã được thả ngũ hành trước đó. Bỏ qua.", "INFO")
+                    logger.info("Video already reacted. Skipping.")
+                else:
+                    if self.config.react_only:
+                        self._emit_log("Chế độ React ngay: Bỏ qua bước chờ xem, tương tác ngay.", "INFO")
+                    else:
+                        self._set_status(f"Đang xem video {index + 1}...")
+                        self._emit_log(f"Đang xem video ({self.config.watch_min_seconds}s - {self.config.watch_max_seconds}s)...", "INFO")
+                        await watch_video(page, self.config.watch_min_seconds, self.config.watch_max_seconds)
+
+                    if not await self._check_control_flags():
+                        break
+
+                    self._set_status(f"Đang thả ngũ hành video {index + 1}...")
+                    success, status_code = await react_element_if_needed(
+                        page, 
+                        dry_run=self.config.dry_run, 
+                        element_mode=self.config.element_mode
+                    )
+                    
+                    if success:
+                        self.stats["reacted"] += 1
+                        self._emit_log(f"Thả ngũ hành thành công ({status_code})!", "INFO")
+                    elif status_code == "already_reacted":
+                        self.stats["skipped"] += 1
+                        self._emit_log("Video đã có reaction. Bỏ qua.", "INFO")
+                    else:
+                        self.stats["errors"] += 1
+                        self._emit_log(f"Không thể thả ngũ hành: {status_code}", "WARNING")
+            except Exception as e:
+                self.stats["errors"] += 1
+                err_msg = f"Lỗi xử lý video {index + 1}: {e}"
+                self._emit_log(err_msg, "ERROR")
+                logger.error(err_msg)
+
+            self._emit_progress()
+
+            if index < max_videos - 1:
+                if not await self._check_control_flags():
+                    break
+                self._set_status("Chuyển sang video tiếp theo...")
+                await scroll_to_next_video(page)
+                await random_delay(self.config.action_delay_min, self.config.action_delay_max)
+
+    async def _run_feed_mode(self, page, browser):
+        self._set_status("Chuyển sang tab Bảng tin...")
+        success_tab = await switch_to_feed_tab(page)
+        if not success_tab:
+            msg = "Không thể chuyển sang tab Bảng tin."
+            self._emit_log(msg, "ERROR")
+            if self.on_error:
+                self.on_error(msg)
+            return
+
+        max_posts = self.config.max_videos
+        from utils.selectors import UCircleSelectors
+
+        # Scroll lên đầu trang bắt đầu từ bài mới nhất
+        self._set_status("Đang scroll về đầu trang bảng tin...")
+        await scroll_to_top_feed(page)
+        await random_delay(0.5, 1.0)
+
+        self._emit_log(f"Bắt đầu lướt Bảng tin (mục tiêu {max_posts} bài)...", "INFO")
+
+        processed_buttons = set()
+
+        for index in range(max_posts):
+            if not await self._check_control_flags():
+                self._emit_log("Tiến trình đã được dừng bởi người dùng.", "WARNING")
+                break
+
+            self.stats["current"] = index + 1
+            self._emit_progress()
+            self._set_status(f"Đang tìm/xử lý bài viết {index + 1}/{max_posts}")
+
+            # Tìm nút react chưa xử lý theo đúng thứ tự DOM (từ bài mới nhất trên cùng xuống dưới)
+            target_button = None
+            retries = 0
+            while not target_button and retries < 10:
+                if not await self._check_control_flags():
+                    return
+
+                # Cách 1 (Chuẩn nhất): Quét theo thứ tự các thẻ article từ trên xuống dưới (từ mới nhất đến cũ nhất)
+                articles = await page.locator('article[data-post="true"], article[data-post-id], article').all()
+                for art in articles:
+                    try:
+                        post_id = await art.get_attribute("data-post-id")
+                        if not post_id:
+                            post_id = await art.evaluate("el => el.getAttribute('data-post-id') || el.innerText.slice(0, 30)")
+                        
+                        if post_id and post_id not in processed_buttons:
+                            # Tìm nút react bên trong article này
+                            react_btn = art.locator('button[data-react], button[data-react-on], button[data-react-mine], button[aria-haspopup="menu"], [data-react]').first
+                            if await react_btn.count() > 0:
+                                target_button = react_btn
+                                processed_buttons.add(post_id)
+                                break
+                    except Exception:
+                        pass
+
+                # Cách 2 (Fallback): Quét tất cả các nút react nếu không tìm thấy qua article
+                if not target_button:
+                    buttons = await page.locator(UCircleSelectors.FEED_REACT_BTN).all()
+                    for btn in buttons:
+                        try:
+                            post_id = await btn.evaluate("b => { const art = b.closest('article'); return art ? art.getAttribute('data-post-id') : null; }")
+                            if not post_id:
+                                box = await btn.bounding_box()
+                                if box:
+                                    post_id = f"fallback_{round(box['x'])}_{round(box['y'])}"
+
+                            if post_id and post_id not in processed_buttons:
+                                target_button = btn
+                                processed_buttons.add(post_id)
+                                break
+                        except Exception:
+                            pass
+
+                if not target_button:
+                    self._set_status("Cuộn tìm bài viết mới...")
+                    await scroll_feed(page)
+                    retries += 1
+
+            if not target_button:
+                # Trước khi dừng, thử bấm "Xem thêm" một lần nữa
+                self._emit_log("Không tìm thấy bài viết mới. Đang thử bấm 'Xem thêm'...", "WARNING")
+                scrolled_to_bottom = False
+                try:
+                    # Scroll xuống cuối trang để load nút "Xem thêm"
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(2000)
+                    load_more_clicked = await click_load_more_if_available(page)
+                    if load_more_clicked:
+                        scrolled_to_bottom = True
+                        await random_delay(1.5, 2.5)
+                except Exception:
+                    pass
+
+                if not scrolled_to_bottom:
+                    self._emit_log("Không tìm thấy bài viết mới nào sau nhiều lần cuộn. Kết thúc.", "WARNING")
+                    break
+
+                # Sau khi bấm Xem thêm, quét lại theo article
+                articles_after = await page.locator('article[data-post="true"], article[data-post-id], article').all()
+                for art in articles_after:
+                    try:
+                        post_id = await art.get_attribute("data-post-id")
+                        if not post_id:
+                            post_id = await art.evaluate("el => el.getAttribute('data-post-id') || el.innerText.slice(0, 30)")
+                        
+                        if post_id and post_id not in processed_buttons:
+                            react_btn = art.locator('button[data-nguhanh-main="true"], button[data-react], button[aria-haspopup="menu"]').first
+                            if await react_btn.count() > 0:
+                                target_button = react_btn
+                                processed_buttons.add(post_id)
+                                break
+                    except Exception:
+                        pass
+
+                if not target_button:
+                    self._emit_log("Không có bài viết mới sau khi bấm 'Xem thêm'. Kết thúc.", "WARNING")
+                    break
+
+            try:
+                await target_button.scroll_into_view_if_needed()
+                await random_delay(0.5, 1.2)
+                self._set_status(f"Đang kiểm tra/thả bài viết {index + 1}...")
+
+                if self.config.dry_run:
+                    self._emit_log("[DRY-RUN] Sẽ thả ngũ hành bài viết này.", "INFO")
+                    self.stats["reacted"] += 1
+                else:
+                    # ────────────────────────────────────────────────────────
+                    # BƯỚC 1: Click nút chính để mở tray ngũ hành
+                    # Selector thực tế: button[data-nguhanh-main="true"]
+                    # ────────────────────────────────────────────────────────
+                    await target_button.click()
+                    await random_delay(0.6, 1.2)
+
+                    # ────────────────────────────────────────────────────────
+                    # BƯỚC 2: Chờ tray xuất hiện
+                    # Selector thực tế: div[data-nguhanh-tray="true"]
+                    # ────────────────────────────────────────────────────────
+                    tray_loc = page.locator('div[data-nguhanh-tray="true"]')
+                    try:
+                        await tray_loc.wait_for(state="visible", timeout=4000)
+                    except Exception:
+                        self._emit_log(f"Bài viết {index + 1}: Không mở được tray. Bỏ qua.", "WARNING")
+                        self.stats["errors"] += 1
+                        continue
+
+                    # ────────────────────────────────────────────────────────
+                    # BƯỚC 3: Đọc tất cả actors trong tray
+                    # Selector: button[data-nguhanh-actor]
+                    # Đã thả: aria-checked="true" hoặc data-nguhanh-actor-on="true"
+                    # ────────────────────────────────────────────────────────
+                    actor_btns = tray_loc.locator('button[data-nguhanh-actor]')
+                    actor_count = await actor_btns.count()
+
+                    if actor_count == 0:
+                        # Không có selector actor → thả thẳng (chế độ cá nhân)
+                        opt_btns = tray_loc.locator('button[data-nguhanh-opt]')
+                        opt_count = await opt_btns.count()
+                        if opt_count > 0:
+                            opts = []
+                            for oi in range(opt_count):
+                                ob = opt_btns.nth(oi)
+                                v = await ob.get_attribute("data-nguhanh-opt")
+                                if v:
+                                    opts.append(v)
+                            chosen = _draw_element(opts, self.config.element_mode) if opts else None
+                            if chosen:
+                                try:
+                                    await tray_loc.locator(f'button[data-nguhanh-opt="{chosen}"]').click(timeout=3000)
+                                    self.stats["reacted"] += 1
+                                    self._emit_log(f"Đã thả '{chosen}' cho bài viết {index + 1} (cá nhân).", "INFO")
+                                except Exception as e:
+                                    self._emit_log(f"Lỗi thả cá nhân: {e}", "WARNING")
+                        else:
+                            self._emit_log("Không tìm thấy nút reaction trong tray.", "WARNING")
+                        continue
+
+                    self._emit_log(f"Phát hiện {actor_count} tư cách cho bài viết {index + 1}.", "INFO")
+
+                    # ────────────────────────────────────────────────────────
+                    # BƯỚC 4: Lặp qua từng actor
+                    # ────────────────────────────────────────────────────────
+                    for actor_idx in range(actor_count):
+                        if not await self._check_control_flags():
+                            break
+
+                        # Mở lại tray nếu đây không phải actor đầu tiên
+                        if actor_idx > 0:
+                            await target_button.click()
+                            await random_delay(0.6, 1.2)
+                            try:
+                                await tray_loc.wait_for(state="visible", timeout=4000)
+                            except Exception:
+                                self._emit_log(f"Không mở được tray cho actor {actor_idx + 1}.", "WARNING")
+                                break
+
+                        # Lấy lại button actor (sau khi mở lại tray)
+                        actor_btn = tray_loc.locator('button[data-nguhanh-actor]').nth(actor_idx)
+                        try:
+                            actor_name = (await actor_btn.text_content() or f"Actor {actor_idx + 1}").strip()
+                            actor_name = actor_name or await actor_btn.get_attribute("title") or f"Actor {actor_idx + 1}"
+                        except Exception:
+                            actor_name = f"Actor {actor_idx + 1}"
+
+                        # ── Kiểm tra đã thả chưa ──────────────────────────
+                        already_done = False
+                        try:
+                            checked = await actor_btn.get_attribute("aria-checked")
+                            actor_on = await actor_btn.get_attribute("data-nguhanh-actor-on")
+                            if checked == "true" or (actor_on and actor_on.lower() == "true"):
+                                already_done = True
+                        except Exception:
+                            pass
+
+                        if already_done:
+                            self._emit_log(f"Tư cách '{actor_name}' đã thả trước đó. Bỏ qua.", "INFO")
+                            self.stats["skipped"] += 1
+                            # Đóng tray trước khi sang actor tiếp theo
+                            try:
+                                await target_button.click(force=True)
+                                await random_delay(0.4, 0.8)
+                            except Exception:
+                                pass
+                            continue
+
+                        # ── Chọn actor này ────────────────────────────────
+                        self._emit_log(f"Đang chọn tư cách: {actor_name} ({actor_idx + 1}/{actor_count})", "INFO")
+                        try:
+                            await actor_btn.click()
+                            await random_delay(0.4, 0.8)
+                        except Exception as e:
+                            self._emit_log(f"Lỗi khi click actor '{actor_name}': {e}", "WARNING")
+                            continue
+
+                        # ── Đọc danh sách reaction options ────────────────
+                        # Selector thực tế: button[data-nguhanh-opt="hoa/tho/kim/thuy/moc"]
+                        opt_btns = tray_loc.locator('button[data-nguhanh-opt]')
+                        opt_count = await opt_btns.count()
+                        if opt_count == 0:
+                            self._emit_log(f"Không tìm thấy nút ngũ hành cho '{actor_name}'.", "WARNING")
+                            continue
+
+                        opts = []
+                        for oi in range(opt_count):
+                            ob = opt_btns.nth(oi)
+                            v = await ob.get_attribute("data-nguhanh-opt")
+                            if v:
+                                opts.append(v)
+
+                        chosen = _draw_element(opts, self.config.element_mode) if opts else None
+                        if not chosen:
+                            self._emit_log(f"Không chọn được ngũ hành cho '{actor_name}'.", "WARNING")
+                            continue
+
+                        # ── Click reaction ────────────────────────────────
+                        try:
+                            opt_btn = tray_loc.locator(f'button[data-nguhanh-opt="{chosen}"]')
+                            await opt_btn.wait_for(state="visible", timeout=3000)
+                            await opt_btn.click(timeout=3000)
+                            self.stats["reacted"] += 1
+                            self._emit_log(f"Đã thả '{chosen}' cho bài viết {index + 1} (Tư cách {actor_idx + 1}/{actor_count}: {actor_name}).", "INFO")
+                            await random_delay(0.5, 1.0)
+                        except Exception as e:
+                            self._emit_log(f"Lỗi thả '{chosen}' cho '{actor_name}': {e}", "WARNING")
+                            self.stats["errors"] += 1
+
+            except Exception as e:
+                self.stats["errors"] += 1
+                self._emit_log(f"Lỗi khi xử lý bài viết {index + 1}: {e}", "ERROR")
+
+            await random_delay(self.config.action_delay_min, self.config.action_delay_max)
+
