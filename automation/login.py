@@ -42,6 +42,9 @@ async def _wait_for_logged_in_ui(page: Page, timeout_seconds: int = 90) -> bool:
         "section[data-wavee-video-id]",
         "button[data-wavee-grid-cell='true']",
         "button[data-wavee-react='true']",
+        "article[data-post-id]",
+        "button[data-nguhanh-main='true']",
+        "text=Bảng tin"
     ]
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -84,10 +87,15 @@ async def _is_logged_in(page: Page) -> bool:
             "button:has-text(Logout)",
             "button:has-text(Log out)",
             "button:has-text(Sign out)",
+            "text=Đăng xuất",
+            "text=Hồ sơ",
+            "text=Bảng tin",
             "[data-tool='wavee']",
             "button[data-tool='wavee']",
             "section[data-wavee-video-id]",
             "button[data-wavee-grid-cell='true']",
+            "article[data-post-id]",
+            "button[data-nguhanh-main='true']"
         ]
         for selector in selectors:
             try:

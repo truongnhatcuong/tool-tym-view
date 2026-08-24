@@ -4,7 +4,7 @@ class UCircleSelectors:
 
     # Selector cho nút react trên Bảng tin (feed posts)
     # Dựa trên HTML thực tế: button[data-nguhanh-main="true"]
-    FEED_REACT_BTN = 'button[data-nguhanh-main="true"], button[aria-haspopup="menu"][data-react]'
+    FEED_REACT_BTN = 'button[data-nguhanh-main="true"], button[data-react]'
 
     # Selector nút "Xem thêm" ở cuối danh sách bài viết
     # Attribute thực tế từ DevTools: data-feed-loadmore="true"

@@ -839,8 +839,20 @@ class UCircleAutomationGUI(ctk.CTk):
                     url = profile.ucircle_url or "https://ucircle.net"
                     await page.goto(url)
                     self._append_log(f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập rồi đóng cửa sổ.", "INFO")
-                    while browser.is_connected():
-                        await asyncio.sleep(1)
+                    try:
+                        while len(browser.pages) > 0:
+                            await asyncio.sleep(1)
+                    except Exception:
+                        pass
+                    
+                    try:
+                        await browser.storage_state(path="session.json")
+                        await browser.close()
+                        if browser.browser:
+                            await browser.browser.close()
+                    except Exception:
+                        pass
+                        
                     self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã lưu.", "INFO")
 
             loop = asyncio.new_event_loop()
@@ -1350,8 +1362,19 @@ class UCircleAutomationGUI(ctk.CTk):
                     await page.goto(self.config.ucircle_url)
                     self._append_log("Trình duyệt đã mở. Bạn hãy đăng nhập, sau đó đóng trình duyệt khi hoàn tất.", "INFO")
                     # Chờ browser đóng
-                    while browser.is_connected():
-                        await asyncio.sleep(1)
+                    try:
+                        while len(browser.pages) > 0:
+                            await asyncio.sleep(1)
+                    except Exception:
+                        pass
+                    
+                    try:
+                        await browser.storage_state(path="session.json")
+                        await browser.close()
+                        if browser.browser:
+                            await browser.browser.close()
+                    except Exception:
+                        pass
             
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)

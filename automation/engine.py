@@ -169,7 +169,10 @@ class AutomationEngine:
             self._set_status("Đã dừng")
             if browser:
                 try:
+                    await browser.storage_state(path="session.json")
                     await browser.close()
+                    if browser.browser:
+                        await browser.browser.close()
                 except Exception:
                     pass
             if self.on_finish:
@@ -306,8 +309,7 @@ class AutomationEngine:
                             post_id = await art.evaluate("el => el.getAttribute('data-post-id') || el.innerText.slice(0, 30)")
                         
                         if post_id and post_id not in processed_buttons:
-                            # Tìm nút react bên trong article này
-                            react_btn = art.locator('button[data-react], button[data-react-on], button[data-react-mine], button[aria-haspopup="menu"], [data-react]').first
+                            react_btn = art.locator('button[data-nguhanh-main="true"], button[data-react]').first
                             if await react_btn.count() > 0:
                                 target_button = react_btn
                                 processed_buttons.add(post_id)
@@ -366,7 +368,7 @@ class AutomationEngine:
                             post_id = await art.evaluate("el => el.getAttribute('data-post-id') || el.innerText.slice(0, 30)")
                         
                         if post_id and post_id not in processed_buttons:
-                            react_btn = art.locator('button[data-nguhanh-main="true"], button[data-react], button[aria-haspopup="menu"]').first
+                            react_btn = art.locator('button[data-nguhanh-main="true"], button[data-react]').first
                             if await react_btn.count() > 0:
                                 target_button = react_btn
                                 processed_buttons.add(post_id)
@@ -380,7 +382,7 @@ class AutomationEngine:
 
             try:
                 await target_button.scroll_into_view_if_needed()
-                await random_delay(0.5, 1.2)
+                await random_delay(1.0, 1.5)
                 self._set_status(f"Đang kiểm tra/thả bài viết {index + 1}...")
 
                 if self.config.dry_run:
@@ -392,7 +394,7 @@ class AutomationEngine:
                     # Selector thực tế: button[data-nguhanh-main="true"]
                     # ────────────────────────────────────────────────────────
                     await target_button.click()
-                    await random_delay(0.6, 1.2)
+                    await random_delay(0.5, 0.8)
 
                     # ────────────────────────────────────────────────────────
                     # BƯỚC 2: Chờ tray xuất hiện
@@ -442,19 +444,21 @@ class AutomationEngine:
                     # ────────────────────────────────────────────────────────
                     # BƯỚC 4: Lặp qua từng actor
                     # ────────────────────────────────────────────────────────
+                    is_tray_open = True
                     for actor_idx in range(actor_count):
                         if not await self._check_control_flags():
                             break
 
-                        # Mở lại tray nếu đây không phải actor đầu tiên
-                        if actor_idx > 0:
+                        # Mở lại khay nếu nó đã bị đóng
+                        if not is_tray_open:
                             await target_button.click()
-                            await random_delay(0.6, 1.2)
+                            await random_delay(0.5, 0.8)
                             try:
                                 await tray_loc.wait_for(state="visible", timeout=4000)
                             except Exception:
                                 self._emit_log(f"Không mở được tray cho actor {actor_idx + 1}.", "WARNING")
                                 break
+                            is_tray_open = True
 
                         # Lấy lại button actor (sau khi mở lại tray)
                         actor_btn = tray_loc.locator('button[data-nguhanh-actor]').nth(actor_idx)
@@ -464,34 +468,34 @@ class AutomationEngine:
                         except Exception:
                             actor_name = f"Actor {actor_idx + 1}"
 
-                        # ── Kiểm tra đã thả chưa ──────────────────────────
-                        already_done = False
-                        try:
-                            checked = await actor_btn.get_attribute("aria-checked")
-                            actor_on = await actor_btn.get_attribute("data-nguhanh-actor-on")
-                            if checked == "true" or (actor_on and actor_on.lower() == "true"):
-                                already_done = True
-                        except Exception:
-                            pass
-
-                        if already_done:
-                            self._emit_log(f"Tư cách '{actor_name}' đã thả trước đó. Bỏ qua.", "INFO")
-                            self.stats["skipped"] += 1
-                            # Đóng tray trước khi sang actor tiếp theo
-                            try:
-                                await target_button.click(force=True)
-                                await random_delay(0.4, 0.8)
-                            except Exception:
-                                pass
-                            continue
+                        # (Đã loại bỏ logic kiểm tra sớm qua attribute của actor_btn vì UCircle dùng nó để đánh dấu tab đang chọn)
 
                         # ── Chọn actor này ────────────────────────────────
                         self._emit_log(f"Đang chọn tư cách: {actor_name} ({actor_idx + 1}/{actor_count})", "INFO")
                         try:
+                            await actor_btn.scroll_into_view_if_needed()
                             await actor_btn.click()
-                            await random_delay(0.4, 0.8)
+                            await random_delay(0.3, 0.6)
                         except Exception as e:
                             self._emit_log(f"Lỗi khi click actor '{actor_name}': {e}", "WARNING")
+                            continue
+
+                        # Kiểm tra xem tư cách này đã thả ngũ hành chưa (bằng cách xem các tuỳ chọn ở dưới)
+                        is_reacted = False
+                        try:
+                            opts = await tray_loc.locator('button[data-nguhanh-opt]').all()
+                            for opt in opts:
+                                aria_checked = await opt.get_attribute("aria-checked")
+                                react_on = await opt.get_attribute("data-react-on")
+                                class_name = await opt.get_attribute("class") or ""
+                                if aria_checked == "true" or react_on == "true" or "On_" in class_name:
+                                    is_reacted = True
+                                    break
+                        except Exception:
+                            pass
+                            
+                        if is_reacted:
+                            self._emit_log(f"Tư cách '{actor_name}' đã thả ngũ hành trước đó. Bỏ qua.", "INFO")
                             continue
 
                         # ── Đọc danh sách reaction options ────────────────
@@ -517,15 +521,26 @@ class AutomationEngine:
                         # ── Click reaction ────────────────────────────────
                         try:
                             opt_btn = tray_loc.locator(f'button[data-nguhanh-opt="{chosen}"]')
+                            await opt_btn.scroll_into_view_if_needed()
                             await opt_btn.wait_for(state="visible", timeout=3000)
                             await opt_btn.click(timeout=3000)
                             self.stats["reacted"] += 1
                             self._emit_log(f"Đã thả '{chosen}' cho bài viết {index + 1} (Tư cách {actor_idx + 1}/{actor_count}: {actor_name}).", "INFO")
                             await random_delay(0.5, 1.0)
+                            is_tray_open = False
                         except Exception as e:
                             self._emit_log(f"Lỗi thả '{chosen}' cho '{actor_name}': {e}", "WARNING")
                             self.stats["errors"] += 1
 
+                    # Sau khi quét xong toàn bộ tư cách của bài viết này,
+                    # Nếu khay vẫn đang mở (vì toàn bị bỏ qua) thì đóng lại để không dính lỗi tray ảo ở bài sau.
+                    if is_tray_open:
+                        try:
+                            await target_button.click(force=True)
+                            await random_delay(0.3, 0.5)
+                        except Exception:
+                            pass
+                            
             except Exception as e:
                 self.stats["errors"] += 1
                 self._emit_log(f"Lỗi khi xử lý bài viết {index + 1}: {e}", "ERROR")
