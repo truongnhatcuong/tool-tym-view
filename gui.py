@@ -31,6 +31,7 @@ from profile_manager import (
 from automation.engine import AutomationEngine
 from automation.batch_engine import BatchEngine
 from automation.browser import launch_browser
+from automation.login import _is_logged_in
 from playwright.async_api import async_playwright
 from utils.logger import logger
 
@@ -838,22 +839,35 @@ class UCircleAutomationGUI(ctk.CTk):
                     page = browser.pages[0] if browser.pages else await browser.new_page()
                     url = profile.ucircle_url or "https://ucircle.net"
                     await page.goto(url)
-                    self._append_log(f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập rồi đóng cửa sổ.", "INFO")
+                    self._append_log(f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập UCircle, hệ thống sẽ tự động lưu session...", "INFO")
+                    
+                    login_saved = False
                     try:
-                        while len(browser.pages) > 0:
+                        while len(browser.pages) > 0 and not page.is_closed():
+                            try:
+                                is_auth = await page.evaluate("() => !!localStorage.getItem('uc-core-auth')")
+                                if is_auth or await _is_logged_in(page):
+                                    await browser.storage_state(path="session.json")
+                                    if not login_saved:
+                                        login_saved = True
+                                        self._append_log(f"[{profile.name}] ✅ Đã đăng nhập UCircle và lưu session.json thành công!", "INFO")
+                            except Exception:
+                                pass
                             await asyncio.sleep(1)
                     except Exception:
                         pass
                     
                     try:
                         await browser.storage_state(path="session.json")
+                    except Exception:
+                        pass
+
+                    try:
                         await browser.close()
-                        if browser.browser:
-                            await browser.browser.close()
                     except Exception:
                         pass
                         
-                    self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã lưu.", "INFO")
+                    self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã được lưu trữ.", "INFO")
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -1352,7 +1366,7 @@ class UCircleAutomationGUI(ctk.CTk):
         self.after(0, handle_finish)
 
     def _open_browser_manual(self):
-        """Mở browser profile độc lập để người dùng đăng nhập thủ công"""
+        """Mở browser profile độc lập để người dùng đăng nhập thủ công và tự động lưu session"""
         def run_browser():
             self._append_log("Đang mở trình duyệt để đăng nhập thủ công...", "INFO")
             async def _launch():
@@ -1360,21 +1374,35 @@ class UCircleAutomationGUI(ctk.CTk):
                     browser = await launch_browser(p, headless=False, profile_dir=self.config.profile_dir)
                     page = browser.pages[0] if browser.pages else await browser.new_page()
                     await page.goto(self.config.ucircle_url)
-                    self._append_log("Trình duyệt đã mở. Bạn hãy đăng nhập, sau đó đóng trình duyệt khi hoàn tất.", "INFO")
-                    # Chờ browser đóng
+                    self._append_log("Trình duyệt đã mở. Hãy đăng nhập UCircle, hệ thống sẽ TỰ ĐỘNG LƯU SESSION ngay khi bạn đăng nhập!", "INFO")
+                    
+                    login_saved = False
                     try:
-                        while len(browser.pages) > 0:
+                        while len(browser.pages) > 0 and not page.is_closed():
+                            try:
+                                is_auth = await page.evaluate("() => !!localStorage.getItem('uc-core-auth')")
+                                if is_auth or await _is_logged_in(page):
+                                    await browser.storage_state(path="session.json")
+                                    if not login_saved:
+                                        login_saved = True
+                                        self._append_log("✅ Đã đăng nhập UCircle và lưu session.json thành công! Giờ bạn có thể đóng trình duyệt.", "INFO")
+                            except Exception:
+                                pass
                             await asyncio.sleep(1)
                     except Exception:
                         pass
                     
                     try:
                         await browser.storage_state(path="session.json")
-                        await browser.close()
-                        if browser.browser:
-                            await browser.browser.close()
                     except Exception:
                         pass
+
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                        
+                    self._append_log("Trình duyệt đã đóng. Session đã được lưu trữ an toàn trong session.json.", "INFO")
             
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)

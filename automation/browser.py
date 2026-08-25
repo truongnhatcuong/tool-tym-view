@@ -34,10 +34,14 @@ async def launch_browser(
     if proxy and proxy.get("server"):
         context_kwargs["proxy"] = proxy
 
-    # Nạp session.json nếu đã có
-    if os.path.exists("session.json"):
-        context_kwargs["storage_state"] = "session.json"
+    # Nạp session.json nếu đã có và hợp lệ (> 10 bytes)
+    if os.path.exists("session.json") and os.path.getsize("session.json") > 10:
+        try:
+            context_kwargs["storage_state"] = "session.json"
+        except Exception as e:
+            logger.warning(f"Không thể áp dụng storage_state từ session.json: {e}")
 
     context = await browser_instance.new_context(**context_kwargs)
     
     return context
+

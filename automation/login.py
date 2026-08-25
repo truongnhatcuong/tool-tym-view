@@ -69,15 +69,25 @@ async def _wait_for_logged_in_ui(page: Page, timeout_seconds: int = 90) -> bool:
 
 
 async def _is_logged_in(page: Page) -> bool:
-    """Best-effort login detection that accepts post-login app markers."""
+    """Best-effort login detection that accepts post-login app markers and localStorage."""
     try:
-        if await _looks_like_login_page(page):
-            return False
-
         url = page.url.lower()
         if "ucircle.net" not in url:
             return False
 
+        # 1. Kiểm tra token trong localStorage (chính xác nhất)
+        try:
+            auth_val = await page.evaluate("() => localStorage.getItem('uc-core-auth')")
+            if auth_val and ("access_token" in auth_val or "expires_at" in auth_val):
+                return True
+        except Exception:
+            pass
+
+        # 2. Nếu đang ở trang login thì chưa đăng nhập
+        if await _looks_like_login_page(page):
+            return False
+
+        # 3. Kiểm tra các phần tử UI sau đăng nhập
         selectors = [
             "text=Logout",
             "text=Log out",
@@ -111,7 +121,7 @@ async def _is_logged_in(page: Page) -> bool:
 
 
 async def ensure_login(page: Page, wait_timeout_seconds: int = 900):
-    logger.info("Checking login state...")
+    logger.info("Kiểm tra trạng thái đăng nhập UCircle...")
     try:
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=10000)
@@ -119,25 +129,32 @@ async def ensure_login(page: Page, wait_timeout_seconds: int = 900):
             pass
 
         if await _is_logged_in(page):
-            logger.info("Login state already detected. Continuing automation.")
+            logger.info("Đã phát hiện trạng thái đăng nhập. Tự động cập nhật session.json...")
+            try:
+                await page.context.storage_state(path="session.json")
+            except Exception:
+                pass
             return
 
         print("\n" + "=" * 60)
-        print("Please login manually in the browser.")
-        print("Then either press ENTER in this terminal or wait for the script to continue automatically.")
+        print("Vui lòng đăng nhập UCircle trên trình duyệt...")
+        print("Hệ thống sẽ tự động phát hiện và lưu session khi bạn đăng nhập.")
         print("=" * 60 + "\n")
 
-        logger.info("Waiting for the authenticated UCircle app UI to appear after login...")
+        logger.info("Đang chờ người dùng đăng nhập UCircle...")
         deadline = time.monotonic() + wait_timeout_seconds
         while time.monotonic() < deadline:
-            if await _wait_for_logged_in_ui(page, timeout_seconds=15):
-                logger.info("Login state became active. Continuing automation...")
+            if await _is_logged_in(page) or await _wait_for_logged_in_ui(page, timeout_seconds=5):
+                logger.info("Đăng nhập UCircle thành công! Đang lưu session.json...")
+                try:
+                    await page.context.storage_state(path="session.json")
+                    logger.info("Đã lưu session.json thành công để tái sử dụng đa luồng.")
+                except Exception as e:
+                    logger.warning(f"Không thể lưu session.json: {e}")
                 return
-            if await _is_logged_in(page):
-                logger.info("Login state detected after waiting. Continuing automation...")
-                return
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
-        logger.warning("Login wait timed out. Continuing anyway; if user is still not logged in, next steps may fail.")
+        logger.warning("Hết thời gian chờ đăng nhập. Tiếp tục chạy...")
     except Exception as e:
-        logger.error(f"Error during login check: {e}")
+        logger.error(f"Lỗi kiểm tra đăng nhập: {e}")
+

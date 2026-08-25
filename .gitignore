@@ -13,9 +13,12 @@ browser-profile/
 # Logs & screenshots
 logs/
 
-# Env / secrets
+# Env / secrets & session
 .env
+session.json
+*.session.json
 
 # IDE
 .vscode/
 .idea/
+
