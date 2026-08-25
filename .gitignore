@@ -7,9 +7,9 @@ __pycache__/
 venv/
 .venv/
 
-# Playwright browser profile (chứa session đăng nhập)
+# Playwright browser profile & session (chứa token đăng nhập)
 browser-profile/
-
+session.json
 # Logs & screenshots
 logs/
 

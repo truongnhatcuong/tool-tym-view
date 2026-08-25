@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import time
 from playwright.async_api import Page
 from utils.logger import logger
@@ -113,15 +112,35 @@ async def _is_logged_in(page: Page) -> bool:
 async def ensure_login(page: Page, wait_timeout_seconds: int = 900):
     logger.info("Checking login state...")
     try:
+        # Đợi trang load cơ bản
         try:
-            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
         except Exception:
             pass
 
+        # ── RETRY LOOP ────────────────────────────────────────────────────────
+        # UCircle là SPA: sau domcontentloaded còn cần thêm thời gian để JS
+        # khởi tạo và restore session từ persistent context / localStorage.
+        # Thử tối đa 30s (15 lần × 2s) trước khi kết luận "chưa đăng nhập".
+        MAX_PRECHECK_SECONDS = 30
+        RETRY_INTERVAL = 2
+        waited = 0
+        while waited < MAX_PRECHECK_SECONDS:
+            logger.info(f"Login check [{waited}s]: {page.url[:80]}")
+
+            if await _is_logged_in(page):
+                logger.info("Login state already detected. Continuing automation.")
+                return
+
+            await asyncio.sleep(RETRY_INTERVAL)
+            waited += RETRY_INTERVAL
+
+        # Kiểm tra lần cuối sau khi đợi đủ
         if await _is_logged_in(page):
-            logger.info("Login state already detected. Continuing automation.")
+            logger.info("Login state detected after waiting. Continuing automation.")
             return
 
+        # ── Nếu vẫn chưa login → yêu cầu đăng nhập thủ công ────────────────
         print("\n" + "=" * 60)
         print("Please login manually in the browser.")
         print("Then either press ENTER in this terminal or wait for the script to continue automatically.")

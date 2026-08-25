@@ -522,6 +522,24 @@ class UCircleAutomationGUI(ctk.CTk):
         )
         self.btn_delete_profile.grid(row=0, column=2, padx=5, pady=8)
 
+        self.btn_first_login = ctk.CTkButton(
+            toolbar, text="🔑 Đăng Nhập Lần Đầu",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#8b5cf6", hover_color="#7c3aed",
+            height=32, width=150,
+            command=self._on_first_login
+        )
+        self.btn_first_login.grid(row=0, column=3, padx=5, pady=8)
+
+        self.btn_logout_session = ctk.CTkButton(
+            toolbar, text="🚪 Đăng Xuất Session",
+            font=ctk.CTkFont(size=12),
+            fg_color="#ef4444", hover_color="#dc2626",
+            height=32, width=140,
+            command=self._on_logout_session
+        )
+        self.btn_logout_session.grid(row=0, column=4, padx=5, pady=8)
+
         self.btn_login_profile = ctk.CTkButton(
             toolbar, text="🌐 Đăng Nhập Profile",
             font=ctk.CTkFont(size=12),
@@ -530,7 +548,7 @@ class UCircleAutomationGUI(ctk.CTk):
             state="disabled",
             command=self._on_login_profile
         )
-        self.btn_login_profile.grid(row=0, column=3, padx=5, pady=8)
+        self.btn_login_profile.grid(row=0, column=5, padx=5, pady=8)
 
         # ── Profile List ──────────────────────────────────────────
         self.profiles_scroll = ctk.CTkFrame(
@@ -816,6 +834,94 @@ class UCircleAutomationGUI(ctk.CTk):
         ctk.CTkButton(btn_frame, text="Hủy", fg_color="#334155", hover_color="#475569",
                       width=100, command=dialog.destroy).pack(side="left", padx=10)
 
+    def _on_first_login(self):
+        """Mở trình duyệt để người dùng đăng nhập lần đầu tiên.
+        Tự động lưu real-time cookies + localStorage (uc-core-auth) vào session.json."""
+        def run_browser():
+            self._append_log("🔑 Đang mở trình duyệt để đăng nhập lần đầu...", "INFO")
+
+            async def _launch():
+                import json, os
+                async with async_playwright() as p:
+                    browser = await launch_browser(p, headless=False, profile_dir=None)
+                    page = browser.pages[0] if browser.pages else await browser.new_page()
+                    await page.goto("https://ucircle.net/auth/login")
+                    self._append_log(
+                        "Trình duyệt đã mở. Bạn hãy tiến hành đăng nhập. Tool sẽ tự động lưu session khi bạn đăng nhập thành công!",
+                        "INFO"
+                    )
+
+                    # Vòng lặp lưu real-time session WHILE page is open
+                    try:
+                        while len(browser.pages) > 0:
+                            try:
+                                await browser.storage_state(path="session.json")
+                            except Exception:
+                                pass
+                            await asyncio.sleep(2)
+                    except Exception:
+                        pass
+
+                    try:
+                        await browser.close()
+                        if hasattr(browser, "browser") and browser.browser:
+                            await browser.browser.close()
+                    except Exception:
+                        pass
+
+                    if os.path.exists("session.json"):
+                        try:
+                            with open("session.json", "r", encoding="utf-8") as f:
+                                st = json.load(f)
+                            has_auth = any(
+                                item.get("name") == "uc-core-auth"
+                                for orig in st.get("origins", [])
+                                for item in orig.get("localStorage", [])
+                            )
+                            if has_auth:
+                                self._append_log(
+                                    "✓ Đăng nhập thành công! Session đã được lưu vào session.json. Bây giờ bạn có thể chạy đa luồng thoải mái!",
+                                    "INFO"
+                                )
+                            else:
+                                self._append_log(
+                                    "⚠ Trình duyệt đã đóng. Vui lòng đảm bảo bạn đã đăng nhập thành công trước khi đóng.",
+                                    "WARNING"
+                                )
+                        except Exception:
+                            pass
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_launch())
+            except Exception as e:
+                self._append_log(f"Lỗi mở trình duyệt đăng nhập: {e}", "ERROR")
+            finally:
+                loop.close()
+
+        threading.Thread(target=run_browser, daemon=True).start()
+
+    def _on_logout_session(self):
+        """Xóa session.json và các dữ liệu session cũ để người dùng đăng nhập tài khoản khác từ đầu."""
+        import os, shutil
+        try:
+            if os.path.exists("session.json"):
+                os.remove("session.json")
+
+            if os.path.exists("./browser-profile"):
+                try:
+                    shutil.rmtree("./browser-profile")
+                except Exception:
+                    pass
+
+            self._append_log(
+                "🚪 Đã đăng xuất session thành công! session.json và cache cũ đã xóa. Bạn có thể nhấn '🔑 Đăng Nhập Lần Đầu' để đăng nhập tài khoản mới.",
+                "INFO"
+            )
+        except Exception as e:
+            self._append_log(f"Lỗi khi đăng xuất: {e}", "ERROR")
+
     def _on_login_profile(self):
         """Mở browser riêng cho profile được chọn để đăng nhập thủ công."""
         if not self._selected_profile_id:
@@ -829,6 +935,7 @@ class UCircleAutomationGUI(ctk.CTk):
             proxy = profile.proxy.to_playwright_proxy() if profile.proxy and profile.proxy.is_valid() else None
 
             async def _launch():
+                import json, os
                 async with async_playwright() as p:
                     browser = await launch_browser(
                         p, headless=False,
@@ -836,24 +943,32 @@ class UCircleAutomationGUI(ctk.CTk):
                         proxy=proxy
                     )
                     page = browser.pages[0] if browser.pages else await browser.new_page()
+
                     url = profile.ucircle_url or "https://ucircle.net"
                     await page.goto(url)
-                    self._append_log(f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập rồi đóng cửa sổ.", "INFO")
+                    self._append_log(
+                        f"[{profile.name}] Đã mở trình duyệt. Hãy đăng nhập rồi đóng cửa sổ.",
+                        "INFO"
+                    )
                     try:
                         while len(browser.pages) > 0:
-                            await asyncio.sleep(1)
+                            try:
+                                await browser.storage_state(path="session.json")
+                            except Exception:
+                                pass
+                            await asyncio.sleep(2)
                     except Exception:
                         pass
-                    
+
                     try:
                         await browser.storage_state(path="session.json")
                         await browser.close()
-                        if browser.browser:
+                        if hasattr(browser, "browser") and browser.browser:
                             await browser.browser.close()
                     except Exception:
                         pass
-                        
-                    self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã lưu.", "INFO")
+
+                    self._append_log(f"[{profile.name}] Trình duyệt đã đóng. Session đã được lưu thành công!", "INFO")
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -865,6 +980,7 @@ class UCircleAutomationGUI(ctk.CTk):
                 loop.close()
 
         threading.Thread(target=run_browser, daemon=True).start()
+
 
     # ── Profile Dialog (Add / Edit) ──────────────────────────────────
     def _show_profile_dialog(self, profile: ProfileConfig, is_new: bool = True):
@@ -927,10 +1043,15 @@ class UCircleAutomationGUI(ctk.CTk):
         make_label(8, "Mục tiêu:")
         seg_target = ctk.CTkSegmentedButton(
             scroll,
-            values=["🎥 Video Ngắn (Wavee)", "📰 Bảng Tin (Feed)"],
+            values=["🎥 Video Ngắn (Wavee)", "🏠 Wavee Cá Nhân (Profile)", "📰 Bảng Tin (Feed)"],
             font=ctk.CTkFont(size=11)
         )
-        seg_target.set("📰 Bảng Tin (Feed)" if profile.target_type == "feed" else "🎥 Video Ngắn (Wavee)")
+        _target_display_map = {
+            "feed": "📰 Bảng Tin (Feed)",
+            "my_wavee": "🏠 Wavee Cá Nhân (Profile)",
+            "wavee": "🎥 Video Ngắn (Wavee)",
+        }
+        seg_target.set(_target_display_map.get(profile.target_type, "🎥 Video Ngắn (Wavee)"))
         seg_target.grid(row=8, column=1, padx=(0, 10), pady=6, sticky="ew")
 
         make_label(9, "Chế độ:")
@@ -1042,7 +1163,12 @@ class UCircleAutomationGUI(ctk.CTk):
             profile.max_videos = max_v
             profile.profile_dir = dir_val
             profile.proxy = None
-            profile.target_type = "feed" if seg_target.get() == "📰 Bảng Tin (Feed)" else "wavee"
+            _target_value_map = {
+                "📰 Bảng Tin (Feed)": "feed",
+                "🏠 Wavee Cá Nhân (Profile)": "my_wavee",
+                "🎥 Video Ngắn (Wavee)": "wavee",
+            }
+            profile.target_type = _target_value_map.get(seg_target.get(), "wavee")
             profile.react_only = (seg_react_mode.get() == "⚡ Chỉ Thả Ngũ Hành (Nhanh)")
             profile.element_mode = elem_rev.get(combo_elem.get(), "shuffle")
             try:
@@ -1369,9 +1495,10 @@ class UCircleAutomationGUI(ctk.CTk):
                         pass
                     
                     try:
+                        # Luôn lưu master session.json khi đóng để tất cả luồng dùng chung
                         await browser.storage_state(path="session.json")
                         await browser.close()
-                        if browser.browser:
+                        if hasattr(browser, "browser") and browser.browser:
                             await browser.browser.close()
                     except Exception:
                         pass
