@@ -7,18 +7,15 @@ __pycache__/
 venv/
 .venv/
 
-# Playwright browser profile (chứa session đăng nhập)
+# Playwright browser profile & session (chứa token đăng nhập)
 browser-profile/
-
+session.json
 # Logs & screenshots
 logs/
 
-# Env / secrets & session
+# Env / secrets
 .env
-session.json
-*.session.json
 
 # IDE
 .vscode/
 .idea/
-

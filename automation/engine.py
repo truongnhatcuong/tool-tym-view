@@ -151,6 +151,8 @@ class AutomationEngine:
                 target_type = self.config.target_type
                 if target_type == "feed":
                     await self._run_feed_mode(page, browser)
+                elif target_type == "my_wavee":
+                    await self._run_my_wavee_mode(page, target_video_id, browser)
                 else:
                     await self._run_wavee_mode(page, target_video_id, browser)
 
@@ -169,9 +171,13 @@ class AutomationEngine:
             self._set_status("Đã dừng")
             if browser:
                 try:
+                    # Luôn cập nhật session.json để các luồng sau tự động đọc được
                     await browser.storage_state(path="session.json")
+                except Exception:
+                    pass
+                try:
                     await browser.close()
-                    if browser.browser:
+                    if hasattr(browser, "browser") and browser.browser:
                         await browser.browser.close()
                 except Exception:
                     pass
@@ -259,6 +265,95 @@ class AutomationEngine:
                 if not await self._check_control_flags():
                     break
                 self._set_status("Chuyển sang video tiếp theo...")
+                await scroll_to_next_video(page)
+                await random_delay(self.config.action_delay_min, self.config.action_delay_max)
+
+    async def _run_my_wavee_mode(self, page, target_video_id, browser):
+        """
+        Chạy chế độ 'Wavee Cá Nhân' — trang profile của chính người dùng.
+        URL dạng: https://ucircle.net/app/profile?tab=wavee&v=<video_id>
+        Khác với wavee thông thường (user khác): URL đã mở thẳng viewer,
+        không cần navigate qua grid public của người khác.
+        """
+        self._set_status("Chuyển sang Wavee cá nhân...")
+        self._emit_log("Đang truy cập Wavee trang cá nhân (profile)...", "INFO")
+
+        # Đợi trang load xong sau goto() trước đó
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(2000)
+
+        # Kiểm tra xem viewer đã mở chưa (URL có ?v=... thì thường tự mở)
+        if not await self._check_control_flags():
+            return
+
+        # Thử click vào video cụ thể nếu có target_video_id
+        from automation.feed import click_specific_video
+        if target_video_id:
+            self._emit_log(f"Tìm video mục tiêu trên profile: {target_video_id}", "INFO")
+            success_video = await click_specific_video(page, target_video_id)
+            if not success_video:
+                self._emit_log("Không tìm thấy video mục tiêu trên profile, thử video đầu tiên...", "WARNING")
+        else:
+            self._emit_log("Không có target_video_id, sẽ dùng video đầu tiên trên profile.", "INFO")
+
+        # Vòng lặp xử lý tương tự _run_wavee_mode
+        max_videos = self.config.max_videos
+        for index in range(max_videos):
+            if not await self._check_control_flags():
+                self._emit_log("Tiến trình đã được dừng bởi người dùng.", "WARNING")
+                break
+
+            self.stats["current"] = index + 1
+            self._emit_progress()
+            self._set_status(f"[Wavee Cá Nhân] Đang xử lý video {index + 1}/{max_videos}")
+            self._emit_log(f"--- [My Wavee] Đang xử lý video {index + 1}/{max_videos} ---", "INFO")
+
+            try:
+                already_done = await is_video_already_reacted(page)
+                if already_done:
+                    self.stats["skipped"] += 1
+                    self._emit_log("Video đã được thả ngũ hành trước đó. Bỏ qua.", "INFO")
+                else:
+                    if self.config.react_only:
+                        self._emit_log("Chế độ React ngay: Bỏ qua bước chờ xem.", "INFO")
+                    else:
+                        self._set_status(f"[My Wavee] Đang xem video {index + 1}...")
+                        self._emit_log(f"Đang xem video ({self.config.watch_min_seconds}s - {self.config.watch_max_seconds}s)...", "INFO")
+                        await watch_video(page, self.config.watch_min_seconds, self.config.watch_max_seconds)
+
+                    if not await self._check_control_flags():
+                        break
+
+                    self._set_status(f"[My Wavee] Đang thả ngũ hành video {index + 1}...")
+                    success, status_code = await react_element_if_needed(
+                        page,
+                        dry_run=self.config.dry_run,
+                        element_mode=self.config.element_mode
+                    )
+
+                    if success:
+                        self.stats["reacted"] += 1
+                        self._emit_log(f"[My Wavee] Thả ngũ hành thành công ({status_code})!", "INFO")
+                    elif status_code == "already_reacted":
+                        self.stats["skipped"] += 1
+                        self._emit_log("[My Wavee] Video đã có reaction. Bỏ qua.", "INFO")
+                    else:
+                        self.stats["errors"] += 1
+                        self._emit_log(f"[My Wavee] Không thể thả ngũ hành: {status_code}", "WARNING")
+            except Exception as e:
+                self.stats["errors"] += 1
+                err_msg = f"[My Wavee] Lỗi xử lý video {index + 1}: {e}"
+                self._emit_log(err_msg, "ERROR")
+
+            self._emit_progress()
+
+            if index < max_videos - 1:
+                if not await self._check_control_flags():
+                    break
+                self._set_status("[My Wavee] Chuyển sang video tiếp theo...")
                 await scroll_to_next_video(page)
                 await random_delay(self.config.action_delay_min, self.config.action_delay_max)
 
