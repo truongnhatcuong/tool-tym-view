@@ -935,7 +935,6 @@ class UCircleAutomationGUI(ctk.CTk):
             proxy = profile.proxy.to_playwright_proxy() if profile.proxy and profile.proxy.is_valid() else None
 
             async def _launch():
-                import json, os
                 async with async_playwright() as p:
                     browser = await launch_browser(
                         p, headless=False,
