@@ -56,12 +56,20 @@ async def launch_browser(
 
                 if origins:
                     for origin_entry in origins:
+                        origin = origin_entry.get("origin")
+                        if not origin:
+                            continue
                         ls_items = origin_entry.get("localStorage", [])
                         for item in ls_items:
-                            k = json.dumps(item["name"])
-                            v = json.dumps(item["value"])
+                            name = item.get("name")
+                            value = item.get("value")
+                            if name is None or value is None:
+                                continue
+                            k = json.dumps(name)
+                            v = json.dumps(value)
+                            o = json.dumps(origin)
                             await context.add_init_script(
-                                f"try {{ localStorage.setItem({k}, {v}); }} catch(e) {{}}"
+                                f"try {{ if (location.origin === {o}) {{ localStorage.setItem({k}, {v}); }} }} catch(e) {{}}"
                             )
                     logger.info(f"-> Đã nạp localStorage (uc-core-auth) từ session.json vào persistent profile.")
             except Exception as e:
